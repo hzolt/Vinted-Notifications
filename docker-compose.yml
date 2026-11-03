@@ -17,11 +17,13 @@ services:
       # --- AI filter (see AI-FILTER.md) ---
       # Required: without a key the AI filter is off and every query notifies as before.
       - NANOGPT_API_KEY=
+      # Models (any model name from your NanoGPT subscription; "off" disables that reviewer).
+      # The vision model must accept images.
+      - AI_FILTER_VISION_MODEL=minimax/minimax-m3       # looks at the photos
+      - AI_FILTER_TEXT_MODEL=z-ai/glm-5.3               # reads title, description and details
       # Optional settings, shown with their defaults:
       # - AI_FILTER_ENABLED=true                          # false = off, key stays in place
       # - AI_FILTER_BASE_URL=https://nano-gpt.com/api/subscription/v1
-      # - AI_FILTER_VISION_MODEL=minimax/minimax-m3       # "off" disables the photo reviewer
-      # - AI_FILTER_TEXT_MODEL=deepseek/deepseek-v4.1-flash  # "off" disables the text reviewer
       # - AI_FILTER_MAX_PHOTOS=4                          # photos sent to the vision model
       # - AI_FILTER_FETCH_DETAILS=true                    # fetch description/all photos per item
       # - AI_FILTER_COMBINE=veto                          # veto | strict
