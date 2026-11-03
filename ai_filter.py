@@ -549,12 +549,32 @@ def parse_reply(text):
     raise ValueError(f"no decision found in reply: {text[:200]!r}")
 
 
+_RETRY_STATUS = {502, 503, 504}
+_ATTEMPTS = 3
+
+
 def _post(s, payload):
+    """POST to the model with retries on transient failures.
+
+    A connection error is retried on a fresh connection: the session keeps
+    connections alive between checks, and the provider closing an idle one is
+    the usual cause of "Connection aborted / RemoteDisconnected". DNS hiccups
+    and 502/503/504 answers get the same short retry; 429 honours Retry-After
+    (up to 30 s). Timeouts are not retried, they already took AI_FILTER_TIMEOUT.
+    """
     url = f"{s['base_url']}/chat/completions"
     headers = {"Authorization": f"Bearer {s['api_key']}", "Content-Type": "application/json"}
-    for attempt in (1, 2):
-        response = _session.post(url, headers=headers, json=payload, timeout=s["timeout"])
-        if response.status_code == 429 and attempt == 1:
+    for attempt in range(1, _ATTEMPTS + 1):
+        last = attempt == _ATTEMPTS
+        try:
+            response = _session.post(url, headers=headers, json=payload, timeout=s["timeout"])
+        except requests.ConnectionError as e:
+            if last or isinstance(e, requests.Timeout):
+                raise
+            logger.warning(f"AI filter: {payload.get('model')}: {_connection_cause(e)}, retrying ({attempt}/{_ATTEMPTS - 1})")
+            time.sleep(2 * attempt)
+            continue
+        if response.status_code == 429 and not last:
             try:
                 wait = float(response.headers.get("Retry-After", 10))
             except ValueError:
@@ -563,10 +583,33 @@ def _post(s, payload):
                 logger.warning(f"AI filter rate-limited, retrying in {wait:.0f} s")
                 time.sleep(wait)
                 continue
+        if response.status_code in _RETRY_STATUS and not last:
+            logger.warning(f"AI filter: {payload.get('model')} answered HTTP {response.status_code}, retrying")
+            time.sleep(3 * attempt)
+            continue
         response.raise_for_status()
         return response.json()
-    response.raise_for_status()
-    return response.json()
+
+
+def _connection_cause(e):
+    """Short, human-readable cause of a requests ConnectionError."""
+    text = repr(e)
+    if any(x in text for x in ("NameResolution", "Name or service not known",
+                                "Temporary failure in name resolution", "nodename nor servname",
+                                "No address associated")):
+        return "DNS lookup failed"
+    if isinstance(e, requests.exceptions.SSLError) or "SSLError" in text:
+        return "TLS error"
+    if isinstance(e, requests.exceptions.ProxyError):
+        return "proxy error"
+    if any(x in text for x in ("RemoteDisconnected", "Connection aborted", "reset by peer",
+                                "ConnectionResetError", "BrokenPipe")):
+        return "connection dropped"
+    if "refused" in text.lower():
+        return "connection refused"
+    if "unreachable" in text.lower():
+        return "network unreachable"
+    return e.__class__.__name__
 
 
 def _short_error(e):
@@ -575,7 +618,7 @@ def _short_error(e):
     if isinstance(e, requests.HTTPError) and e.response is not None:
         return f"model returned HTTP {e.response.status_code}"
     if isinstance(e, requests.ConnectionError):
-        return "could not reach the model"
+        return f"could not reach the model ({_connection_cause(e)})"
     return str(e)[:150] or e.__class__.__name__
 
 
@@ -591,6 +634,7 @@ def _ask(reviewer, model, system, content, s):
                             int((reply.get("usage") or {}).get("prompt_tokens") or 0),
                             time.monotonic() - started, text)
     except Exception as e:
+        logger.warning(f"AI filter: {reviewer} reviewer ({model}) failed: {e!r}"[:600])
         return ModelVerdict(reviewer, model, "error", _short_error(e), seconds=time.monotonic() - started)
 
 
