@@ -215,6 +215,10 @@ if __name__ == "__main__":
         else:
             break
 
+    # AI filter column (fork addition, idempotent)
+    if db.ensure_ai_schema():
+        logger.info("Added AI filter columns to the database")
+
     # Plugin checker
     plugin_checker()
 

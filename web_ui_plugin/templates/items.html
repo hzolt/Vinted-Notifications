@@ -3,6 +3,14 @@
 {% block title %}Items - Vinted Notifications{% endblock %}
 
 {% block content %}
+{% macro ai_badge(item) -%}
+{%- if item.ai_decision -%}
+{%- set styles = {'yes': ('bg-success', 'AI: sent'), 'maybe': ('bg-warning text-dark', 'AI: unsure, sent'), 'no': ('bg-secondary', 'AI: skipped'), 'error': ('bg-danger', 'AI: failed, sent')} -%}
+{%- set st = styles.get(item.ai_decision, ('bg-light text-dark', 'AI: ' ~ item.ai_decision)) -%}
+<span class="badge {{ st[0] }}" style="white-space: normal; text-align: left;" title="{{ item.ai_reason or '' }}"><i class="bi bi-robot me-1"></i>{{ st[1] }}</span>
+{%- if item.ai_reason %}<div class="small text-muted mt-1">{{ item.ai_reason }}</div>{% endif -%}
+{%- endif -%}
+{%- endmacro %}
 <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom">
     <h1 class="h2">Items</h1>
 </div>
@@ -105,6 +113,7 @@
                                 <p class="card-text small text-muted mb-0">
                                     <i class="bi bi-calendar me-1"></i> {{ item.timestamp }}
                                 </p>
+                                {% if item.ai_decision %}<div class="mt-2">{{ ai_badge(item) }}</div>{% endif %}
                             </div>
                             <div class="card-footer bg-white p-3">
                                 <a href="{{ item.url }}" target="_blank" class="btn btn-primary w-100">
@@ -147,7 +156,7 @@
                                 </div>
                                 {% endif %}
                             </td>
-                            <td>{{ item.title }}</td>
+                            <td>{{ item.title }}{% if item.ai_decision %}<div class="mt-1">{{ ai_badge(item) }}</div>{% endif %}</td>
                             <td>{{ item.price }} {{ item.currency }}</td>
                             <td>{{ item.query|truncate(30) }}</td>
                             <td>{{ item.timestamp }}</td>

@@ -7,6 +7,10 @@
     <h1 class="h2">Queries</h1>
 </div>
 
+<div class="alert {{ 'alert-info' if ai_status.enabled else 'alert-secondary' }} py-2" role="status">
+    <i class="bi bi-robot me-2"></i>{{ ai_status.text }}
+</div>
+
 <div class="row mb-4">
     <div class="col-md-12">
         <div class="card">
@@ -48,6 +52,21 @@
                         <div class="col-md-2 d-flex align-items-center">
                             <button type="submit" class="btn btn-primary w-100">Add Query</button>
                         </div>
+
+                        <!-- AI filter (optional, fork addition) -->
+                        <div class="col-md-12">
+                            <label for="ai_intent" class="form-label"><i class="bi bi-robot me-1"></i>AI filter&nbsp;<span
+                                    class="text-muted">(optional)</span></label>
+                            <textarea class="form-control"
+                                      id="ai_intent"
+                                      name="ai_intent"
+                                      rows="2"
+                                      placeholder="e.g. Genuine items only, good or better condition, no visible stains, size M or L. Skip bundles and replicas."></textarea>
+                            <div class="form-text">
+                                Describe in plain language what you want. New items from this query are sent to the
+                                model with their photo and only notified if they fit. Leave empty to notify on everything.
+                            </div>
+                        </div>
                     </div>
                 </form>
             </div>
@@ -69,6 +88,7 @@
                         <tr>
                             <th>#</th>
                             <th>Query</th>
+                            <th>AI filter</th>
                             <th>Last Found Item</th>
                             <th>Actions</th>
                         </tr>
@@ -78,6 +98,13 @@
                         <tr>
                             <td>{{ query.id }}</td>
                             <td>{{ query.display }}</td>
+                            <td class="small" style="max-width: 22rem;">
+                                {% if query.ai_intent %}
+                                <span title="{{ query.ai_intent }}"><i class="bi bi-robot text-info me-1"></i>{{ query.ai_intent|truncate(80) }}</span>
+                                {% else %}
+                                <span class="text-muted">&mdash;</span>
+                                {% endif %}
+                            </td>
                             <td>{{ query.last_found_item }}</td>
                             <td>
                                 <div class="btn-group" role="group">
@@ -132,8 +159,28 @@
                                                                required
                                                                placeholder="My search">
                                                     </div>
+                                                    <div class="mb-3">
+                                                        <label for="ai_intent{{ query.id }}" class="form-label"><i
+                                                                class="bi bi-robot me-1"></i>AI filter <span
+                                                                class="text-muted">(optional)</span></label>
+                                                        <textarea class="form-control"
+                                                                  id="ai_intent{{ query.id }}"
+                                                                  name="ai_intent"
+                                                                  rows="4"
+                                                                  placeholder="Leave empty to notify on everything">{{ query.ai_intent }}</textarea>
+                                                        <div class="form-text">
+                                                            "Test" runs this text against the last 5 items this query
+                                                            found, without saving. It can take up to a minute.
+                                                        </div>
+                                                    </div>
                                                 </div>
                                                 <div class="modal-footer">
+                                                    <button type="submit" class="btn btn-outline-info me-auto"
+                                                            formaction="/ai_test/{{ query.query_id }}"
+                                                            formnovalidate
+                                                            {{ '' if ai_status.enabled else 'disabled' }}>
+                                                        <i class="bi bi-robot"></i> Test
+                                                    </button>
                                                     <button type="button" class="btn btn-secondary"
                                                             data-bs-dismiss="modal">
                                                         Cancel
@@ -176,7 +223,7 @@
                         </tr>
                         {% else %}
                         <tr>
-                            <td colspan="4" class="text-center">No queries found</td>
+                            <td colspan="5" class="text-center">No queries found</td>
                         </tr>
                         {% endfor %}
                         </tbody>

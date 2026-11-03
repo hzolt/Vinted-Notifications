@@ -1,6 +1,7 @@
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
 import db
 import core
+import ai_filter
 import os
 import re
 from urllib.parse import urlparse, parse_qs
@@ -137,6 +138,7 @@ def index():
 def queries():
     # Get queries
     all_queries = db.get_queries()
+    ai_intents = db.get_query_ai_intents()
     formatted_queries = []
     for i, query in enumerate(all_queries):
         parsed_query = urlparse(query[1])
@@ -164,19 +166,25 @@ def queries():
                 "query": query[1],
                 "display": query_name if query_name else query[1],
                 "last_found_item": last_found_item,
+                "ai_intent": ai_intents.get(query[0], ""),
             }
         )
 
-    return render_template("queries.html", queries=formatted_queries)
+    return render_template(
+        "queries.html", queries=formatted_queries, ai_status=ai_filter.status()
+    )
 
 
 @app.route("/add_query", methods=["POST"])
 def add_query():
     query = request.form.get("query")
     query_name = request.form.get("query_name", "").strip()
+    ai_intent = request.form.get("ai_intent", "").strip()
     if query:
         message, is_new_query = core.process_query(
-            query, name=query_name if query_name != "" else None
+            query,
+            name=query_name if query_name != "" else None,
+            ai_intent=ai_intent or None,
         )
         if is_new_query:
             flash(f"Query added: {query}", "success")
@@ -220,6 +228,8 @@ def update_query(query_id):
             query_id, query, name=query_name if query_name != "" else None
         )
         if success:
+            if "ai_intent" in request.form:
+                db.set_query_ai_intent(query_id, request.form.get("ai_intent", ""))
             flash("Query updated", "success")
         else:
             flash(message, "error")
@@ -227,6 +237,55 @@ def update_query(query_id):
         flash("No query provided", "error")
 
     return redirect(url_for("queries"))
+
+
+@app.route("/ai_test/<int:query_id>", methods=["POST"])
+def ai_test(query_id):
+    """Run an AI filter text against the last items this query found."""
+    ai_intent = request.form.get("ai_intent", "").strip() or db.get_query_ai_intent(
+        query_id
+    )
+    query_row = next((q for q in db.get_queries() if q[0] == query_id), None)
+    if query_row is None:
+        flash("Query not found", "error")
+        return redirect(url_for("queries"))
+    if not ai_intent:
+        flash("Write an AI filter text first", "warning")
+        return redirect(url_for("queries"))
+    if not ai_filter.is_enabled():
+        flash(ai_filter.status()["text"], "warning")
+        return redirect(url_for("queries"))
+
+    try:
+        limit = max(1, min(int(request.form.get("limit", 5)), 10))
+    except ValueError:
+        limit = 5
+    results = []
+    for item in db.get_items(limit=limit, query=query_row[1]):
+        # item: (id, title, price, currency, timestamp, query, photo_url, query_name)
+        verdict = ai_filter.judge(
+            ai_intent, item[1], item[2], item[3] or "", photo_url=item[6]
+        )
+        results.append(
+            {
+                "title": item[1],
+                "price": f"{item[2]} {item[3] or ''}".strip(),
+                "photo_url": item[6],
+                "decision": verdict.decision,
+                "reason": verdict.reason,
+                "notify": verdict.notify,
+                "seconds": round(verdict.seconds, 1),
+                "input_tokens": verdict.input_tokens,
+            }
+        )
+    name = query_row[3] or query_row[1]
+    return render_template(
+        "ai_test.html",
+        query_name=name,
+        ai_intent=ai_intent,
+        results=results,
+        ai_status=ai_filter.status(),
+    )
 
 
 @app.route("/items")
@@ -245,6 +304,7 @@ def items():
                 break
 
     items_data = db.get_items(limit=limit, query=query_string)
+    ai_verdicts = db.get_item_ai_verdicts([item[0] for item in items_data])
     formatted_items = []
 
     for item in items_data:
@@ -265,6 +325,8 @@ def items():
                 ),
                 "url": f"{urlparse(item[5]).scheme}://{urlparse(item[5]).netloc}/items/{item[0]}",
                 "photo_url": item[6],
+                "ai_decision": ai_verdicts.get(item[0], (None, None))[0],
+                "ai_reason": ai_verdicts.get(item[0], (None, None))[1],
             }
         )
 

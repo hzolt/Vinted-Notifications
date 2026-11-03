@@ -1,5 +1,6 @@
 import db
 import requests
+import ai_filter
 from pyVintedVN import Vinted, requester
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 from logger import get_logger
@@ -13,7 +14,7 @@ logger = get_logger(__name__)
 MAX_NOTIFICATIONS_PER_RUN = 10
 
 
-def process_query(query, name=None):
+def process_query(query, name=None, ai_intent=None):
     """
     Process a Vinted query URL by:
     1. Checking if the URL is a brand URL and converting it to standard format if needed
@@ -27,6 +28,7 @@ def process_query(query, name=None):
     Args:
         query (str): The Vinted query URL
         name (str, optional): A name for the query. If provided, it will be used as the query name.
+        ai_intent (str, optional): Plain-language AI filter text for this query.
 
     Returns:
         tuple: (message, is_new_query)
@@ -84,7 +86,7 @@ def process_query(query, name=None):
         return "Query already exists.", False
     else:
         # add the query to the db
-        db.add_query_to_db(processed_query, name)
+        db.add_query_to_db(processed_query, name, ai_intent=ai_intent)
         return "Query added.", True
 
 
@@ -385,7 +387,27 @@ def clear_item_queue(items_queue, new_items_queue):
             )
             to_notify = to_notify[-MAX_NOTIFICATIONS_PER_RUN:]
 
+        # AI filter (fork addition). Runs after first-run priming and the cap, so
+        # tokens are only spent on items that would otherwise be announced. Every
+        # item here is already recorded in the db, so a rejected one is not judged
+        # again on the next run.
+        ai_intent = db.get_query_ai_intent(query_id) if ai_filter.is_enabled() else None
+
         for item in to_notify:
+            ai_note = None
+            if ai_intent:
+                verdict = ai_filter.judge_item(item, ai_intent)
+                db.set_item_ai_verdict(item.id, query_id, verdict.decision, verdict.reason)
+                logger.info(
+                    f"AI filter [query {query_id}] {verdict.decision.upper()}"
+                    f" ({verdict.seconds:.1f} s, {verdict.input_tokens} in-tokens):"
+                    f" {item.title} | {item.price} {item.currency} | {verdict.reason}"
+                    f" | {item.url}"
+                )
+                if not verdict.notify:
+                    continue
+                ai_note = ai_filter.format_note(verdict)
+
             # We create the message
             message_template = db.get_parameter("message_template")
             content = message_template.format(
@@ -394,6 +416,8 @@ def clear_item_queue(items_queue, new_items_queue):
                 brand=item.brand_title,
                 image=None if item.photo is None else item.photo,
             )
+            if ai_note:
+                content = content.rstrip("\n") + "\n" + ai_note
             # add the item to the queue
             new_items_queue.put((content, item.url, "Open Vinted", None, None))
             # new_items_queue.put((content, item.url, "Open Vinted", item.buy_url, "Open buy page"))

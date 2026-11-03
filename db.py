@@ -135,7 +135,7 @@ def is_query_in_db(processed_query):
             conn.close()
 
 
-def add_query_to_db(query, name=None):
+def add_query_to_db(query, name=None, ai_intent=None):
     conn = None
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -148,6 +148,11 @@ def add_query_to_db(query, name=None):
         else:
             cursor.execute(
                 "INSERT INTO queries (query, last_item) VALUES (?, NULL)", (query,)
+            )
+        if ai_intent:
+            cursor.execute(
+                "UPDATE queries SET ai_intent=? WHERE id=?",
+                (ai_intent, cursor.lastrowid),
             )
         conn.commit()
     except Exception:
@@ -235,6 +240,128 @@ def update_query_in_db(query_id, query, name):
     except Exception:
         print_exc()
         return False
+    finally:
+        if conn:
+            conn.close()
+
+
+# ---- AI filter (fork addition) -------------------------------------------
+# Kept out of the versioned migrations on purpose: bumping the "version"
+# parameter would make the Telegram bot report an upstream update every day.
+
+
+def ensure_ai_schema():
+    """Add the AI filter columns if they are missing. Safe to run every start.
+
+    queries.ai_intent            the plain-language filter text
+    items.ai_decision/ai_reason  the model's verdict, shown on the Items page
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        added = False
+        wanted = {
+            "queries": [("ai_intent", "TEXT")],
+            "items": [("ai_decision", "TEXT"), ("ai_reason", "TEXT")],
+        }
+        for table, new_columns in wanted.items():
+            columns = [row[1] for row in conn.execute(f"PRAGMA table_info({table})")]
+            for name, sql_type in new_columns:
+                if name not in columns:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}")
+                    added = True
+        conn.commit()
+        return added
+    except Exception:
+        print_exc()
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+
+def get_query_ai_intent(query_id):
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        row = conn.execute(
+            "SELECT ai_intent FROM queries WHERE id=?", (query_id,)
+        ).fetchone()
+        return row[0].strip() if row and row[0] and row[0].strip() else None
+    except Exception:
+        print_exc()
+        return None
+    finally:
+        if conn:
+            conn.close()
+
+
+def get_query_ai_intents():
+    """Return {query_id: ai_intent} for queries that have one."""
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute(
+            "SELECT id, ai_intent FROM queries WHERE ai_intent IS NOT NULL AND TRIM(ai_intent) != ''"
+        ).fetchall()
+        return {row[0]: row[1] for row in rows}
+    except Exception:
+        print_exc()
+        return {}
+    finally:
+        if conn:
+            conn.close()
+
+
+def set_query_ai_intent(query_id, ai_intent):
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        value = ai_intent.strip() if ai_intent and ai_intent.strip() else None
+        conn.execute("UPDATE queries SET ai_intent=? WHERE id=?", (value, query_id))
+        conn.commit()
+        return True
+    except Exception:
+        print_exc()
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+
+def set_item_ai_verdict(item_id, query_id, decision, reason):
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute(
+            "UPDATE items SET ai_decision=?, ai_reason=? WHERE item=? AND query_id=?",
+            (decision, reason, item_id, query_id),
+        )
+        conn.commit()
+    except Exception:
+        print_exc()
+    finally:
+        if conn:
+            conn.close()
+
+
+def get_item_ai_verdicts(item_ids):
+    """Return {item_id: (decision, reason)} for the given ids that have a verdict."""
+    if not item_ids:
+        return {}
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        placeholders = ",".join("?" * len(item_ids))
+        rows = conn.execute(
+            f"SELECT item, ai_decision, ai_reason FROM items "
+            f"WHERE ai_decision IS NOT NULL AND item IN ({placeholders})",
+            list(item_ids),
+        ).fetchall()
+        return {row[0]: (row[1], row[2]) for row in rows}
+    except Exception:
+        print_exc()
+        return {}
     finally:
         if conn:
             conn.close()

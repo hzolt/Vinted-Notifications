@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+
+{% block title %}AI filter test - Vinted Notifications{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom">
+    <h1 class="h2"><i class="bi bi-robot me-2"></i>AI filter test</h1>
+    <a href="/queries" class="btn btn-sm btn-outline-secondary"><i class="bi bi-arrow-left"></i> Back to queries</a>
+</div>
+
+<div class="card mb-4">
+    <div class="card-body">
+        <div class="mb-2"><strong>Query:</strong> {{ query_name }}</div>
+        <div class="mb-2"><strong>AI filter:</strong> {{ ai_intent }}</div>
+        <div class="text-muted small">{{ ai_status.text }} Nothing was saved. The test only sees the title, price and
+            photo stored for past items; live checks also send brand, size and condition.
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0 align-middle">
+                <thead>
+                <tr>
+                    <th>Photo</th>
+                    <th>Item</th>
+                    <th>Decision</th>
+                    <th>Reason</th>
+                    <th class="text-end">Time / tokens</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for r in results %}
+                <tr>
+                    <td>{% if r.photo_url %}<img src="{{ r.photo_url }}" alt="" style="height: 64px; border-radius: 4px;">{% endif %}</td>
+                    <td>{{ r.title }}<div class="text-muted small">{{ r.price }}</div></td>
+                    <td>
+                        {% if r.decision == 'yes' %}<span class="badge bg-success">yes</span>
+                        {% elif r.decision == 'maybe' %}<span class="badge bg-warning text-dark">maybe</span>
+                        {% elif r.decision == 'no' %}<span class="badge bg-secondary">no</span>
+                        {% else %}<span class="badge bg-danger">error</span>{% endif %}
+                        <div class="small text-muted">{{ 'would notify' if r.notify else 'would skip' }}</div>
+                    </td>
+                    <td class="small">{{ r.reason }}</td>
+                    <td class="text-end small text-muted">{{ r.seconds }} s<br>{{ r.input_tokens }}</td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="5" class="text-center">This query has no stored items to test on yet.</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
