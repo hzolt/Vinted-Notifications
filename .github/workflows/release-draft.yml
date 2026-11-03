@@ -36,6 +36,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
+          # Before the first release: list only commits after this one (the
+          # last commit inherited from the upstream forks)
+          FIRST_RELEASE_BASE: f4b2a40
         run: |
           set -euo pipefail
           git fetch --tags --force
@@ -48,6 +51,10 @@ jobs:
             range="$last_tag..HEAD"
             since="since $last_tag"
             compare="https://github.com/$REPO/compare/$last_tag...main"
+          elif git rev-parse -q --verify "$FIRST_RELEASE_BASE^{commit}" >/dev/null; then
+            range="$FIRST_RELEASE_BASE..HEAD"
+            since="(first release)"
+            compare="https://github.com/$REPO/compare/$FIRST_RELEASE_BASE...main"
           else
             range="HEAD"
             since="(first release)"
