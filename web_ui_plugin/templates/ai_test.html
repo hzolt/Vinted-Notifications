@@ -2,6 +2,11 @@
 
 {% block title %}AI filter test - Vinted Notifications{% endblock %}
 
+{% macro decision_badge(d) -%}
+{%- set colours = {'yes': 'bg-success', 'no': 'bg-secondary', 'maybe': 'bg-warning text-dark', 'error': 'bg-danger'} -%}
+<span class="badge {{ colours.get(d, 'bg-light text-dark') }}">{{ d }}</span>
+{%- endmacro %}
+
 {% block content %}
 <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom">
     <h1 class="h2"><i class="bi bi-robot me-2"></i>AI filter test</h1>
@@ -12,9 +17,7 @@
     <div class="card-body">
         <div class="mb-2"><strong>Query:</strong> {{ query_name }}</div>
         <div class="mb-2"><strong>AI filter:</strong> {{ ai_intent }}</div>
-        <div class="text-muted small">{{ ai_status.text }} Nothing was saved. The test only sees the title, price and
-            photo stored for past items; live checks also send brand, size and condition.
-        </div>
+        <div class="text-muted small">{{ ai_status.text }} Nothing was saved.</div>
     </div>
 </div>
 
@@ -25,30 +28,38 @@
                 <thead>
                 <tr>
                     <th>Photo</th>
-                    <th>Item</th>
-                    <th>Decision</th>
-                    <th>Reason</th>
+                    <th style="min-width: 14rem;">Item</th>
+                    <th>Outcome</th>
+                    <th style="min-width: 12rem;"><i class="bi bi-image me-1"></i>Photos</th>
+                    <th style="min-width: 12rem;"><i class="bi bi-file-text me-1"></i>Text</th>
                     <th class="text-end">Time / tokens</th>
                 </tr>
                 </thead>
                 <tbody>
                 {% for r in results %}
+                {% set l = r.listing %}{% set ev = r.ev %}
                 <tr>
-                    <td>{% if r.photo_url %}<img src="{{ r.photo_url }}" alt="" style="height: 64px; border-radius: 4px;">{% endif %}</td>
-                    <td>{{ r.title }}<div class="text-muted small">{{ r.price }}</div></td>
+                    <td>{% if l.photos %}<img src="{{ l.photos[0] }}" alt="" style="height: 64px; border-radius: 4px;">{% endif %}</td>
                     <td>
-                        {% if r.decision == 'yes' %}<span class="badge bg-success">yes</span>
-                        {% elif r.decision == 'maybe' %}<span class="badge bg-warning text-dark">maybe</span>
-                        {% elif r.decision == 'no' %}<span class="badge bg-secondary">no</span>
-                        {% else %}<span class="badge bg-danger">error</span>{% endif %}
-                        <div class="small text-muted">{{ 'would notify' if r.notify else 'would skip' }}</div>
+                        <a href="{{ l.url }}" target="_blank">{{ l.title }}</a>
+                        <div class="text-muted small">{{ l.price }} {{ l.currency }}{% if l.condition %} · {{ l.condition }}{% endif %}{% if l.size %} · {{ l.size }}{% endif %}</div>
+                        <div class="text-muted small">
+                            details: {{ l.source }}{% if l.source_note %} ({{ l.source_note }}){% endif %},
+                            {{ l.photos|length }} photo(s){% if l.description %}, description {{ l.description|length }} chars{% endif %}
+                        </div>
+                        {% if l.description %}<div class="small fst-italic text-muted">{{ l.description|truncate(140) }}</div>{% endif %}
                     </td>
-                    <td class="small">{{ r.reason }}</td>
-                    <td class="text-end small text-muted">{{ r.seconds }} s<br>{{ r.input_tokens }}</td>
+                    <td>
+                        {{ decision_badge(ev.decision) }}
+                        <div class="small text-muted">{{ 'would notify' if ev.notify else 'would skip' }}</div>
+                    </td>
+                    <td class="small">{% if ev.vision %}{{ decision_badge(ev.vision.decision) }} {{ ev.vision.reason }}{% else %}<span class="text-muted">off</span>{% endif %}</td>
+                    <td class="small">{% if ev.text %}{{ decision_badge(ev.text.decision) }} {{ ev.text.reason }}{% else %}<span class="text-muted">off</span>{% endif %}</td>
+                    <td class="text-end small text-muted">{{ '%.1f'|format(ev.seconds) }} s<br>{{ ev.input_tokens }}</td>
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="5" class="text-center">This query has no stored items to test on yet.</td>
+                    <td colspan="6" class="text-center">This query has no stored items to test on yet.</td>
                 </tr>
                 {% endfor %}
                 </tbody>

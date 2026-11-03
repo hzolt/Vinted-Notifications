@@ -396,17 +396,15 @@ def clear_item_queue(items_queue, new_items_queue):
         for item in to_notify:
             ai_note = None
             if ai_intent:
-                verdict = ai_filter.judge_item(item, ai_intent)
-                db.set_item_ai_verdict(item.id, query_id, verdict.decision, verdict.reason)
+                evaluation = ai_filter.evaluate_item(item, ai_intent)
+                db.save_ai_verdict(item.id, query_id, ai_intent, evaluation.to_row())
                 logger.info(
-                    f"AI filter [query {query_id}] {verdict.decision.upper()}"
-                    f" ({verdict.seconds:.1f} s, {verdict.input_tokens} in-tokens):"
-                    f" {item.title} | {item.price} {item.currency} | {verdict.reason}"
-                    f" | {item.url}"
+                    f"AI filter [query {query_id}] {evaluation.summary()}"
+                    f" | {item.title} | {item.price} {item.currency} | {item.url}"
                 )
-                if not verdict.notify:
+                if not evaluation.notify:
                     continue
-                ai_note = ai_filter.format_note(verdict)
+                ai_note = ai_filter.format_note(evaluation)
 
             # We create the message
             message_template = db.get_parameter("message_template")

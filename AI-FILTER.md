@@ -1,12 +1,17 @@
 # AI filter (fork addition)
 
 Each query can have an **AI filter**: a plain-language description of what you
-want. New items from that query are sent to a vision model (NanoGPT,
-`minimax/minimax-m3` by default) with their main photo, title, brand, size,
-condition and price. Only items the model accepts are sent to Telegram/RSS,
-with a one-line reason under the message.
+want. New items from that query are checked by two reviewers before anything is
+sent to Telegram/RSS:
 
-Queries without an AI filter text behave exactly as before.
+* **Photos** — a vision model (`minimax/minimax-m3` by default) looks at up to
+  4 photos of the listing.
+* **Text** — a text model (`deepseek/deepseek-v4.1-flash` by default) reads the
+  title, description, condition, size, measurements, colour, price and the
+  seller's rating.
+
+Both decisions and the final outcome are stored, shown on the **Items** page
+and logged. Queries without an AI filter text behave exactly as before.
 
 ## How an item flows
 
@@ -14,26 +19,80 @@ Queries without an AI filter text behave exactly as before.
 seen before? -> country allowlist -> banwords -> recorded as seen
    -> (first run of a query: stop here, nothing is announced)
    -> cap: at most 10 announcements per run, newest kept
-   -> AI filter (only if the query has one) -> notify
+   -> AI filter (only if the query has one):
+        fetch full listing -> photos reviewer ┐ in parallel
+                              text reviewer   ┘ -> final decision -> notify?
 ```
 
 The AI check runs last, so tokens are only spent on items that would otherwise
-be announced. Because every item is recorded as seen before the check, a
-rejected listing is never judged twice.
+be announced. Every item is recorded as seen before the check, so a rejected
+listing is never judged twice.
 
-| Model answer | What happens |
+### Full listing
+
+Vinted's search results only carry the main photo, title, brand, size,
+condition and price. For each checked item the bot fetches the full listing
+through its own Vinted session:
+
+1. `www.vinted.<tld>/api/v2/items/<id>` (description, all photos, condition,
+   colour, measurements, seller rating), else
+2. the item page's JSON-LD product block (description, photos, brand, colour,
+   condition), else its `og:description`, else
+3. the search-result data only (main photo, no description). The verdict is
+   then stored with details source `catalog`, and the Items page says
+   "listing details were not available".
+
+That is one extra Vinted request per checked item (not per scraped item).
+
+### Final decision
+
+Each reviewer answers `yes`, `no` or `maybe`, judging only what its evidence
+can show (photos can't confirm a size; text can't show a stain).
+
+| | Final |
 |---|---|
-| `yes` | notified, with `🤖 <reason>` |
-| `maybe` (can't tell from the photo/fields) | notified with `🤖❔ <reason>` (set `AI_FILTER_NOTIFY_MAYBE=false` to skip these) |
-| `no` | not notified; logged, and shown on the Items page as "AI: skipped" |
-| model error / timeout / unreadable reply | notified with `⚠️ AI check skipped: <why>` (set `AI_FILTER_FAIL_OPEN=false` to skip instead) |
+| any reviewer says `no` | `no`, not sent |
+| otherwise, at least one `yes` | `yes`, sent |
+| otherwise (both `maybe`) | `maybe`, sent with ❔ (set `AI_FILTER_NOTIFY_MAYBE=false` to skip) |
+| one reviewer fails (timeout, bad reply) | decided by the other one |
+| both fail | sent with `⚠️ AI check skipped` (set `AI_FILTER_FAIL_OPEN=false` to skip) |
 
-Every decision is stored with the item, so the **Items** page shows a badge
-(sent / unsure, sent / skipped / failed, sent) with the reason under each checked
-item. The **Logs** page has the same, one line per item:
+`AI_FILTER_COMBINE=strict` requires a `yes` from every reviewer that answered;
+anything less becomes `maybe`.
+
+A sent message ends with:
 
 ```
-AI filter [query 3] NO (4.2 s, 1180 in-tokens): Bőr dzseki | 25.0 EUR | faux leather visible at the seams | https://www.vinted.hu/items/...
+🤖 AI: fits
+👁 yes: Eredeti Bedale, ép cipzár
+📝 yes: L méret, „alig hordott”, nincs hiba
+```
+
+### What is stored
+
+Table `ai_verdicts`, one row per checked item and query:
+
+| Column | |
+|---|---|
+| `item_id`, `query_id`, `checked_at` | which item, which query, when (unix time) |
+| `intent` | the AI filter text used for this check |
+| `final_decision`, `final_reason`, `notified` | outcome and whether it was sent (1/0) |
+| `vision_model`, `vision_decision`, `vision_reason`, `vision_tokens` | photos reviewer |
+| `text_model`, `text_decision`, `text_reason`, `text_tokens` | text reviewer |
+| `details_source` | `api`, `page` or `catalog` (see above) |
+| `seconds` | total time for the check |
+
+The database is `data/vinted_notifications.db` on the data volume; open it with
+any SQLite tool, or from the container (the image has no `sqlite3` binary):
+
+```sh
+docker exec <container> python -c "
+import sqlite3
+for r in sqlite3.connect('data/vinted_notifications.db').execute('''
+    SELECT datetime(checked_at, 'unixepoch', 'localtime'), final_decision, notified,
+           vision_decision, vision_reason, text_decision, text_reason
+    FROM ai_verdicts ORDER BY checked_at DESC LIMIT 20'''):
+    print(r)"
 ```
 
 ## Configuration (environment variables)
@@ -42,13 +101,17 @@ AI filter [query 3] NO (4.2 s, 1180 in-tokens): Bőr dzseki | 25.0 EUR | faux le
 |---|---|---|
 | `NANOGPT_API_KEY` | (none) | Required. Without it the AI filter is off and every query behaves as upstream. |
 | `AI_FILTER_ENABLED` | `true` | Kill switch that keeps the key in place. |
-| `AI_FILTER_MODEL` | `minimax/minimax-m3` | Any vision model in the NanoGPT subscription. |
+| `AI_FILTER_VISION_MODEL` | `minimax/minimax-m3` | Photos reviewer; `off` to disable. (`AI_FILTER_MODEL` from the first version still works.) |
+| `AI_FILTER_TEXT_MODEL` | `deepseek/deepseek-v4.1-flash` | Text reviewer; `off` to disable. |
+| `AI_FILTER_MAX_PHOTOS` | `4` | Photos sent to the vision model. |
+| `AI_FILTER_FETCH_DETAILS` | `true` | Fetch the full listing per checked item. |
+| `AI_FILTER_COMBINE` | `veto` | `veto` or `strict`, see above. |
+| `AI_FILTER_NOTIFY_MAYBE` | `true` | Send when the outcome is `maybe`. |
+| `AI_FILTER_FAIL_OPEN` | `true` | Send when no reviewer could answer. |
 | `AI_FILTER_BASE_URL` | `https://nano-gpt.com/api/subscription/v1` | Subscription-only endpoint: never spends prepaid balance. |
-| `AI_FILTER_NOTIFY_MAYBE` | `true` | Notify when the model can't tell. |
-| `AI_FILTER_FAIL_OPEN` | `true` | Notify when the model call fails. |
 | `AI_FILTER_TIMEOUT` | `90` | Seconds per model call. |
-| `AI_FILTER_MAX_TOKENS` | `2000` | Output budget; reasoning models need room. Output tokens don't count against the weekly allowance. |
-| `AI_FILTER_IMAGE_MAX_PX` | `768` | Photo is downscaled and sent as JPEG; smaller = fewer input tokens. |
+| `AI_FILTER_MAX_TOKENS` | `2000` | Output budget per call; reasoning models need room. Output tokens don't count against the weekly allowance. |
+| `AI_FILTER_IMAGE_MAX_PX` | `768` | Photos are downscaled and sent as JPEG; smaller = fewer input tokens. |
 
 The key lives only in the container environment, never in the SQLite database
 or the web UI.
@@ -56,31 +119,35 @@ or the web UI.
 ## Using it
 
 * **Queries page:** an "AI filter" box under the add form, a column in the
-  query list, and a box in each query's Edit dialog.
+  query list, a box in each query's Edit dialog, and a status line naming both
+  models.
 * **Test button** (Edit dialog): runs the text currently in the box against
-  the last 5 items that query found and shows yes/no/maybe with reasons,
-  without saving. Stored items only have title, price and photo, so live
-  checks see slightly more (brand, size, condition).
-* **Check from the shell** that the key and model work:
+  the last 3 items that query found — full listings, both reviewers — and
+  shows each reviewer's answer, without saving.
+* **Items page:** each checked item shows the outcome (fits / doesn't fit /
+  unsure / check failed, sent or skipped) with both reviewers' reasons.
+* **Shell checks** (inside the container, working directory `/app`):
 
   ```sh
-  docker exec -it <container> python ai_filter.py \
-    --intent "Only genuine Barbour waxed jackets, size L, good condition" \
-    --title "Barbour Bedale viaszos kabát" --price 45 --currency EUR \
-    --photo "https://images1.vinted.net/....webp"
+  # Does the full-listing fetch work? (no tokens used)
+  python ai_filter.py --item https://www.vinted.hu/items/123456-slug --details-only
+
+  # Full check of one listing against a filter text
+  python ai_filter.py --item https://www.vinted.hu/items/123456-slug \
+    --intent "Only genuine Barbour waxed jackets, size L, no damage"
   ```
+
+  `Details source: api` or `page` means descriptions are reaching the text
+  model. `catalog` plus an error note means Vinted refused both routes.
 
 ### Writing a good filter text
 
-* Name the things a photo or the fields can show: material, model, size,
-  visible wear, colour, "single item, not a bundle".
-* Say what to do when it can't be seen ("if condition isn't visible, say
-  maybe").
-* Hungarian or English both work; the reason comes back in the language you
-  wrote the filter in.
-* The model does **not** see the listing description (that would cost one more
-  Vinted request per item, and the bot already gets rate-limited on user
-  lookups).
+* Mix what photos show (model, colour, visible wear, single item vs bundle)
+  with what text states (size, measurements, defects, "never worn"); each
+  reviewer picks the parts it can judge.
+* Say what you don't want ("no replicas", "no bundles", "nothing for parts").
+* Hungarian or English both work; reasons come back in the language you wrote
+  the filter in.
 
 ## Deploying
 
@@ -97,13 +164,14 @@ services:
     pull_policy: always
     environment:
       NANOGPT_API_KEY: "..."
-      # AI_FILTER_MODEL: minimax/minimax-m3
+      # AI_FILTER_VISION_MODEL: minimax/minimax-m3
+      # AI_FILTER_TEXT_MODEL: deepseek/deepseek-v4.1-flash
     # ports, volumes, restart: keep as they are
 ```
 
-Keep the existing data volume: the new columns are added on first start and
-nothing else in the database changes. Watchtower can keep updating the image
-as usual.
+Keep the existing data volume: the `ai_verdicts` table and `queries.ai_intent`
+column are created on first start; nothing else in the database changes.
+Watchtower can keep updating the image as usual.
 
 To build locally instead: `docker build -t vinted-notifications:ai .` in this
 folder, use `image: vinted-notifications:ai`, drop `pull_policy: always` and
@@ -123,16 +191,19 @@ git merge rabbit/main        # or terrorsource/main
 ```
 
 The AI filter touches `core.clear_item_queue` (the notify loop at its end),
-`db.py` (new functions only), the web UI and two templates, so merges rarely
+`db.py` (new functions only), the web UI and three templates, so merges rarely
 conflict.
 
 ## Database
 
-`queries.ai_intent`, `items.ai_decision` and `items.ai_reason` (all `TEXT`)
-are added at startup if missing (idempotent). The `version` parameter is
-**not** changed, so the built-in update check keeps working.
+`queries.ai_intent` (TEXT) and the `ai_verdicts` table are created at startup
+if missing (idempotent). The `version` parameter is **not** changed, so the
+built-in update check keeps working. The `items.ai_decision` / `items.ai_reason`
+columns added by the first single-model version are no longer used and can stay.
 
 ## Cost
 
-Roughly 1-2k input tokens per checked item (photo + text); the Test page shows
-the real figure per item. Only queries with an AI filter text use tokens.
+Roughly 3–5k input tokens per checked item for the photos (4 photos at 768 px)
+plus 1–2k for the text; the Test page and the `*_tokens` columns show the real
+figures. Only queries with an AI filter text use tokens, and only for items
+that would otherwise be sent.

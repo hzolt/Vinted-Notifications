@@ -257,27 +257,23 @@ def ai_test(query_id):
         return redirect(url_for("queries"))
 
     try:
-        limit = max(1, min(int(request.form.get("limit", 5)), 10))
+        limit = max(1, min(int(request.form.get("limit", 3)), 10))
     except ValueError:
-        limit = 5
+        limit = 3
+    host = urlparse(query_row[1]).netloc or "www.vinted.hu"
     results = []
     for item in db.get_items(limit=limit, query=query_row[1]):
         # item: (id, title, price, currency, timestamp, query, photo_url, query_name)
-        verdict = ai_filter.judge(
-            ai_intent, item[1], item[2], item[3] or "", photo_url=item[6]
+        listing = ai_filter.Listing(
+            id=item[0],
+            url=f"https://{host}/items/{item[0]}",
+            title=item[1] or "",
+            price=str(item[2]),
+            currency=item[3] or "",
+            photos=[item[6]] if item[6] else [],
         )
-        results.append(
-            {
-                "title": item[1],
-                "price": f"{item[2]} {item[3] or ''}".strip(),
-                "photo_url": item[6],
-                "decision": verdict.decision,
-                "reason": verdict.reason,
-                "notify": verdict.notify,
-                "seconds": round(verdict.seconds, 1),
-                "input_tokens": verdict.input_tokens,
-            }
-        )
+        evaluation = ai_filter.evaluate(ai_intent, listing)
+        results.append({"listing": listing, "ev": evaluation})
     name = query_row[3] or query_row[1]
     return render_template(
         "ai_test.html",
@@ -304,7 +300,7 @@ def items():
                 break
 
     items_data = db.get_items(limit=limit, query=query_string)
-    ai_verdicts = db.get_item_ai_verdicts([item[0] for item in items_data])
+    ai_verdicts = db.get_ai_verdicts([item[0] for item in items_data])
     formatted_items = []
 
     for item in items_data:
@@ -325,8 +321,7 @@ def items():
                 ),
                 "url": f"{urlparse(item[5]).scheme}://{urlparse(item[5]).netloc}/items/{item[0]}",
                 "photo_url": item[6],
-                "ai_decision": ai_verdicts.get(item[0], (None, None))[0],
-                "ai_reason": ai_verdicts.get(item[0], (None, None))[1],
+                "ai": ai_verdicts.get(item[0]),
             }
         )
 
