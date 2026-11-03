@@ -16,7 +16,11 @@ class RSSFeed:
         self.app = Flask(__name__)
         self.queue = queue
         self.items = []
-        self.max_items = db.get_parameter("rss_max_items")
+        # Stored as text in the parameters table
+        try:
+            self.max_items = max(1, int(db.get_parameter("rss_max_items") or 100))
+        except (TypeError, ValueError):
+            self.max_items = 100
 
         # Initialize feed generator
         self.fg = FeedGenerator()
@@ -58,11 +62,14 @@ class RSSFeed:
         title = "New Vinted Item"
         try:
             # Try to extract title from the content
-            title_start = content.find("🆕 Title : ") + len("🆕 Title : ")
-            if title_start > len("🆕 Title : "):
+            marker = "🆕 Title : "
+            marker_at = content.find(marker)
+            if marker_at >= 0:
+                title_start = marker_at + len(marker)
                 title_end = content.find("\n", title_start)
-                if title_end > 0:
-                    title = content[title_start:title_end]
+                if title_end > title_start:
+                    # Message fields are HTML-escaped for Telegram; feedgen escapes again
+                    title = html.unescape(content[title_start:title_end])
         except Exception as e:
             logger.debug(f"Error extracting title from content: {e}")
             pass
@@ -72,15 +79,16 @@ class RSSFeed:
         fe.id(url)
         fe.title(title)
         fe.link(href=url)
-        fe.description(html.escape(content))
+        # content is already valid HTML (fields are escaped in core.clear_item_queue)
+        fe.description(content)
         fe.published(datetime.datetime.now(datetime.timezone.utc))
 
-        # Add to our items list (for tracking)
-        self.items.append((title, url, content, datetime.datetime.now()))
+        # Track entries oldest first so the feed can be trimmed
+        self.items.append(fe)
 
-        # Limit the number of items
-        if len(self.items) > self.max_items:
-            self.items.pop(0)
+        # Limit the number of items: drop the oldest entries from the feed itself
+        while len(self.items) > self.max_items:
+            self.fg.remove_entry(self.items.pop(0))
 
     def serve_rss(self):
         return Response(self.fg.rss_str(), mimetype="application/rss+xml")

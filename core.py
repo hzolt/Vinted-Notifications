@@ -1,4 +1,6 @@
 import db
+import html
+import time
 import requests
 import ai_filter
 from pyVintedVN import Vinted, requester
@@ -408,11 +410,13 @@ def clear_item_queue(items_queue, new_items_queue):
 
             # We create the message
             message_template = db.get_parameter("message_template")
+            # Telegram parses the message as HTML, so seller-written fields must be
+            # escaped: a title with "<" or "&" would otherwise be rejected and lost.
             content = message_template.format(
-                title=item.title,
-                price=str(item.price) + " " + item.currency,
-                brand=item.brand_title,
-                image=None if item.photo is None else item.photo,
+                title=html.escape(str(item.title or "")),
+                price=html.escape(f"{item.price} {item.currency or ''}".strip()),
+                brand=html.escape(str(item.brand_title or "")),
+                image=None if item.photo is None else html.escape(item.photo),
             )
             if ai_note:
                 content = content.rstrip("\n") + "\n" + ai_note
@@ -450,27 +454,48 @@ def contains_banwords(title, banwords_str):
     return False
 
 
+# check_version() runs on every web UI page render, so its result is cached and
+# the GitHub request has a short timeout: a slow GitHub must not stall the UI.
+VERSION_CHECK_TTL = 6 * 60 * 60
+VERSION_CHECK_TIMEOUT = 5
+_version_cache = {"checked_at": 0.0, "key": None, "result": None}
+
+
 def check_version():
     """
-    Check if the application is up to date
-    """
-    try:
-        # Get URL from the database
-        github_url = db.get_parameter("github_url")
-        # Get version from the database
-        ver = db.get_parameter("version")
-        # Get latest version from the repository
-        url = f"{github_url}/releases/latest"
-        response = requests.get(url)
+    Check if the application is up to date.
 
-        if response.status_code == 200:
-            latest_version = response.url.split("/")[-1]
-            is_up_to_date = ver == latest_version
-            return is_up_to_date, ver, latest_version, github_url
-        else:
-            # If we can't check, assume it's up to date
-            return True, ver, ver, github_url
+    Returns (is_up_to_date, current_version, latest_version, github_url). The
+    result is cached for VERSION_CHECK_TTL seconds; failures are cached too so an
+    unreachable GitHub is not retried on every page load.
+    """
+    ver = None
+    github_url = None
+    try:
+        github_url = db.get_parameter("github_url")
+        ver = db.get_parameter("version")
+        key = (github_url, ver)
+        now = time.monotonic()
+        if (
+            _version_cache["result"] is not None
+            and _version_cache["key"] == key
+            and now - _version_cache["checked_at"] < VERSION_CHECK_TTL
+        ):
+            return _version_cache["result"]
+
+        result = (True, ver, ver, github_url)  # if we can't check, assume up to date
+        try:
+            response = requests.get(
+                f"{github_url}/releases/latest", timeout=VERSION_CHECK_TIMEOUT
+            )
+            if response.status_code == 200:
+                latest_version = response.url.split("/")[-1]
+                result = (ver == latest_version, ver, latest_version, github_url)
+        except requests.RequestException as e:
+            logger.warning(f"Could not check for a new version: {e}")
+
+        _version_cache.update(checked_at=now, key=key, result=result)
+        return result
     except Exception as e:
         logger.error(f"Error checking for new version: {str(e)}", exc_info=True)
-        # If we can't check, assume it's up to date
         return True, ver, ver, github_url

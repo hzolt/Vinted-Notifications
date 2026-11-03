@@ -24,6 +24,16 @@ app = Flask(
 app.secret_key = os.urandom(24)
 
 
+def _int_arg(source, name, default, minimum=0, maximum=None):
+    """Read an integer request argument; fall back to the default if it's not a number."""
+    try:
+        value = int(source.get(name, default))
+    except (TypeError, ValueError):
+        value = default
+    value = max(minimum, value)
+    return min(value, maximum) if maximum is not None else value
+
+
 @app.context_processor
 def inject_version_info():
     is_up_to_date, current_ver, latest_version, github_url = core.check_version()
@@ -256,10 +266,7 @@ def ai_test(query_id):
         flash(ai_filter.status()["text"], "warning")
         return redirect(url_for("queries"))
 
-    try:
-        limit = max(1, min(int(request.form.get("limit", 3)), 10))
-    except ValueError:
-        limit = 3
+    limit = _int_arg(request.form, "limit", 3, minimum=1, maximum=10)
     host = urlparse(query_row[1]).netloc or "www.vinted.hu"
     results = []
     for item in db.get_items(limit=limit, query=query_row[1]):
@@ -287,7 +294,7 @@ def ai_test(query_id):
 @app.route("/items")
 def items():
     query_id = request.args.get("query", "")  # Default to empty string instead of None
-    limit = int(request.args.get("limit", 50))
+    limit = _int_arg(request.args, "limit", 50, minimum=1)
 
     # Get items
     query_string = None
@@ -527,8 +534,8 @@ def logs():
 
 @app.route("/api/logs")
 def api_logs():
-    offset = int(request.args.get("offset", 0))
-    limit = int(request.args.get("limit", 100))
+    offset = _int_arg(request.args, "offset", 0)
+    limit = _int_arg(request.args, "limit", 100, minimum=1)
     level_filter = request.args.get("level", "all")
 
     log_file_path = os.path.join("logs", "vinted.log")

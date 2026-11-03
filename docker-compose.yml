@@ -3,7 +3,8 @@ version: "3"
 services:
   vinted-notifications:
     container_name: vinted-notifications
-    image: ghcr.io/terrorsource/vinted-notifications:latest
+    # Built from this fork by .github/workflows/build.yml on every push to main
+    image: ghcr.io/hzolt/vinted-notifications:latest
     pull_policy: always
     init: true
     restart: unless-stopped
@@ -12,6 +13,23 @@ services:
       - TZ=Europe/Amsterdam
       - PUID=1000
       - PGID=1000
+
+      # --- AI filter (see AI-FILTER.md) ---
+      # Required: without a key the AI filter is off and every query notifies as before.
+      - NANOGPT_API_KEY=
+      # Optional settings, shown with their defaults:
+      # - AI_FILTER_ENABLED=true                          # false = off, key stays in place
+      # - AI_FILTER_BASE_URL=https://nano-gpt.com/api/subscription/v1
+      # - AI_FILTER_VISION_MODEL=minimax/minimax-m3       # "off" disables the photo reviewer
+      # - AI_FILTER_TEXT_MODEL=deepseek/deepseek-v4.1-flash  # "off" disables the text reviewer
+      # - AI_FILTER_MAX_PHOTOS=4                          # photos sent to the vision model
+      # - AI_FILTER_FETCH_DETAILS=true                    # fetch description/all photos per item
+      # - AI_FILTER_COMBINE=veto                          # veto | strict
+      # - AI_FILTER_NOTIFY_MAYBE=true                     # notify when the outcome is "maybe"
+      # - AI_FILTER_FAIL_OPEN=true                        # notify when no reviewer could answer
+      # - AI_FILTER_TIMEOUT=90                            # seconds per model call
+      # - AI_FILTER_MAX_TOKENS=2000                       # output budget per call
+      # - AI_FILTER_IMAGE_MAX_PX=768                      # longest photo side sent to the model
     ports:
       - 8200:8000        # Web UI (change the host port to taste)
       # - 8280:8080      # RSS feed (optional; uncomment if you use RSS)

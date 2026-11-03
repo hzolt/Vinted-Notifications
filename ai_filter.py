@@ -310,7 +310,8 @@ def _apply_api_item(listing, data):
         listing.details["Measurements"] = f"length {length or '?'} cm, width {width or '?'} cm"
     user = item.get("user") if isinstance(item.get("user"), dict) else {}
     if user:
-        seller = [user.get("login") or "?"]
+        # The seller's username is deliberately not sent to the model
+        seller = []
         reputation, count = user.get("feedback_reputation"), user.get("feedback_count")
         if reputation is not None and count:
             seller.append(f"rating {float(reputation) * 5:.1f}/5 from {count} reviews")
@@ -318,7 +319,8 @@ def _apply_api_item(listing, data):
             seller.append("no reviews yet")
         if user.get("country_title"):
             seller.append(str(user["country_title"]))
-        listing.details["Seller"] = ", ".join(seller)
+        if seller:
+            listing.details["Seller"] = ", ".join(seller)
     if item.get("is_reserved") or item.get("is_closed"):
         listing.details["Availability"] = "reserved or sold"
 
