@@ -8,10 +8,11 @@ reviewers, in parallel:
 * a text model reads the title, description and listing details.
 
 Vinted's search results carry only the main photo and a few fields, so the
-full listing (description, all photos, condition, measurements, seller rating)
-is fetched per checked item from www.vinted.<tld>/api/v2/items/<id>, falling
-back to the item page's JSON-LD block. If both fail the check runs on the
-search-result data, and the stored verdict says so.
+full listing (description, all photos, condition and other attributes, seller
+rating) is read from the item page, one request per checked item: first the
+page's embedded data, then its schema.org product block, then its preview
+description. If none of that is usable the check runs on the search-result
+data, and the stored verdict says so (details source "catalog").
 
 Final decision, AI_FILTER_COMBINE=veto (default): any "no" rejects; otherwise
 "yes" if either reviewer says yes; otherwise "maybe". AI_FILTER_COMBINE=strict
@@ -171,7 +172,7 @@ class Listing:
     description: str = None
     photos: list = field(default_factory=list)
     details: dict = field(default_factory=dict)  # extra label -> value
-    source: str = "catalog"  # catalog | api | page
+    source: str = "catalog"  # page | jsonld | preview | catalog (see fetch_details)
     source_note: str = ""
 
 
@@ -285,50 +286,104 @@ def _text(value):
     return value or None
 
 
-def _apply_api_item(listing, data):
-    item = data.get("item") if isinstance(data.get("item"), dict) else data
-    if not isinstance(item, dict) or not (item.get("id") or item.get("title")):
-        raise ValueError("no item in API response")
-    listing.title = _text(item.get("title")) or listing.title
-    listing.description = _text(item.get("description")) or listing.description
-    photos = [p.get("url") or p.get("full_size_url") for p in (item.get("photos") or [])
-              if isinstance(p, dict) and (p.get("url") or p.get("full_size_url"))]
-    if photos:
-        listing.photos = photos
-    listing.condition = _text(item.get("status")) or _text(item.get("status_title")) or listing.condition
-    listing.size = _text(item.get("size_title")) or _text(item.get("size")) or listing.size
-    listing.brand = (_text(item.get("brand_title")) or _text(item.get("brand"))
-                     or _text(item.get("brand_dto")) or listing.brand)
-    total = item.get("total_item_price")
-    if isinstance(total, dict) and total.get("amount"):
-        listing.total_price = f"{total.get('amount')} {total.get('currency_code', '')}".strip()
-    colours = [c for c in (_text(item.get("color1")), _text(item.get("color2"))) if c]
-    if colours:
-        listing.details["Colour"] = ", ".join(colours)
-    length, width = item.get("measurement_length"), item.get("measurement_width")
-    if length or width:
-        listing.details["Measurements"] = f"length {length or '?'} cm, width {width or '?'} cm"
-    user = item.get("user") if isinstance(item.get("user"), dict) else {}
-    if user:
-        # The seller's username is deliberately not sent to the model
-        seller = []
-        reputation, count = user.get("feedback_reputation"), user.get("feedback_count")
-        if reputation is not None and count:
-            seller.append(f"rating {float(reputation) * 5:.1f}/5 from {count} reviews")
-        elif count == 0:
-            seller.append("no reviews yet")
-        if user.get("country_title"):
-            seller.append(str(user["country_title"]))
-        if seller:
-            listing.details["Seller"] = ", ".join(seller)
-    if item.get("is_reserved") or item.get("is_closed"):
-        listing.details["Availability"] = "reserved or sold"
-
-
+_FLIGHT_RE = re.compile(r'self\.__next_f\.push\(\[\d+,\s*("(?:[^"\\]|\\.)*")\]\)', re.S)
 _LD_JSON_RE = re.compile(r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', re.S | re.I)
 _OG_DESC_RE = re.compile(r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\']([^"\']*)["\']', re.I)
+_OG_TITLE_RE = re.compile(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']*)["\']', re.I)
 _CONDITIONS = {"newcondition": "new", "usedcondition": "used", "damagedcondition": "damaged",
                "refurbishedcondition": "refurbished"}
+# Item-page attributes that are not worth sending to the model
+_SKIP_ATTRIBUTES = {"upload_date"}
+
+
+def _flight_text(page):
+    """Join the Next.js server-component payload chunks embedded in the item page."""
+    parts = []
+    for literal in _FLIGHT_RE.findall(page):
+        try:
+            parts.append(json.loads(literal))
+        except json.JSONDecodeError:
+            continue
+    return "".join(parts)
+
+
+def _page_plugins(flight, item_id):
+    """The item page's "plugins" list for this item (summary, attributes,
+    description, photos, seller, ...), or None."""
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r'"plugins":\[', flight):
+        try:
+            plugins, _ = decoder.raw_decode(flight, match.end() - 1)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(plugins, list) or not all(isinstance(p, dict) for p in plugins):
+            continue
+        if str(item_id) in {str((p.get("data") or {}).get("item_id")) for p in plugins}:
+            return plugins
+    return None
+
+
+def _apply_plugins(listing, plugins):
+    """Fill the listing from the item page's plugins. Returns True if anything was found."""
+    by_name = {p.get("name"): (p.get("data") or {}) for p in plugins if isinstance(p.get("data"), dict)}
+    found = False
+
+    description = _text((by_name.get("description") or {}).get("description"))
+    if description:
+        listing.description = description
+        found = True
+
+    for attribute in (by_name.get("attributes") or {}).get("attributes") or []:
+        code = attribute.get("code")
+        data = attribute.get("data") or {}
+        value = _text(data.get("value"))
+        if not value or code in _SKIP_ATTRIBUTES:
+            continue
+        found = True
+        if code == "status":
+            listing.condition = value
+        elif code == "size":
+            listing.size = value
+        elif code == "brand":
+            listing.brand = value
+        else:
+            listing.details[_text(data.get("title")) or code] = value
+
+    for data in by_name.values():
+        photos = [p.get("url") or p.get("full_size_url") for p in (data.get("photos") or [])
+                  if isinstance(p, dict) and (p.get("url") or p.get("full_size_url"))]
+        if photos:
+            listing.photos = photos
+            found = True
+            break
+
+    offer = by_name.get("make_offer") or {}
+    listing.title = listing.title or _text(offer.get("title")) or ""
+    price = offer.get("price")
+    if isinstance(price, dict) and price.get("amount") and not listing.price:
+        listing.price = str(price["amount"])
+        listing.currency = price.get("currency_code") or listing.currency
+
+    seller = by_name.get("user_info_header") or {}
+    if seller:
+        # The seller's username is deliberately not sent to the model
+        parts = []
+        count, reputation = seller.get("feedback_count"), seller.get("feedback_reputation")
+        if count and reputation is not None:
+            parts.append(f"rating {float(reputation) * 5:.1f}/5 from {count} reviews")
+        elif count == 0:
+            parts.append("no reviews yet")
+        if seller.get("business"):
+            parts.append("business seller")
+        if parts:
+            listing.details["Seller"] = ", ".join(parts)
+
+    state = by_name.get("ask_seller") or {}
+    if state.get("is_reserved"):
+        listing.details["Availability"] = "reserved"
+    elif state.get("is_hidden") or state.get("can_buy") is False:
+        listing.details["Availability"] = "not available to buy"
+    return found
 
 
 def _find_product(value):
@@ -349,7 +404,8 @@ def _find_product(value):
     return None
 
 
-def _apply_page_html(listing, page):
+def _apply_jsonld(listing, page):
+    """Fill gaps from the page's schema.org Product block. Returns True if it had data."""
     product = None
     for block in _LD_JSON_RE.findall(page):
         try:
@@ -358,65 +414,77 @@ def _apply_page_html(listing, page):
             continue
         if product:
             break
-    description = None
-    if product:
-        listing.title = _text(product.get("name")) or listing.title
-        description = _text(product.get("description"))
-        images = product.get("image")
-        if isinstance(images, str):
-            images = [images]
-        images = [i if isinstance(i, str) else (i or {}).get("url") for i in (images or [])]
-        images = [i for i in images if i]
-        if images:
-            listing.photos = images
-        listing.brand = _text(product.get("brand")) or listing.brand
-        if product.get("color"):
-            listing.details["Colour"] = _text(product.get("color"))
-        if product.get("material"):
-            listing.details["Material"] = _text(product.get("material"))
-        offers = product.get("offers")
-        offers = offers[0] if isinstance(offers, list) and offers else offers
-        if isinstance(offers, dict):
-            condition = str(offers.get("itemCondition") or product.get("itemCondition") or "")
-            condition = _CONDITIONS.get(condition.rsplit("/", 1)[-1].lower())
-            if condition and not listing.condition:
-                listing.condition = condition
-            if str(offers.get("availability", "")).lower().endswith(("soldout", "outofstock")):
-                listing.details["Availability"] = "sold"
-    if not description:
-        match = _OG_DESC_RE.search(page)
-        description = html.unescape(match.group(1)).strip() if match else None
-    if not (product or description):
-        raise ValueError("no product data on the item page")
-    listing.description = description or listing.description
+    if not product:
+        return False
+    listing.title = listing.title or _text(product.get("name")) or ""
+    description = _text(product.get("description"))
+    listing.description = listing.description or description
+    images = product.get("image")
+    images = [images] if isinstance(images, str) else images or []
+    images = [i if isinstance(i, str) else (i or {}).get("url") for i in images]
+    if not listing.photos:
+        listing.photos = [i for i in images if i]
+    listing.brand = listing.brand or _text(product.get("brand"))
+    if _text(product.get("color")) and "Colour" not in listing.details:
+        listing.details["Colour"] = _text(product.get("color"))
+    offers = product.get("offers")
+    offers = offers[0] if isinstance(offers, list) and offers else offers
+    if isinstance(offers, dict):
+        if not listing.price and offers.get("price") is not None:
+            listing.price = str(offers.get("price"))
+            listing.currency = offers.get("priceCurrency") or listing.currency
+        condition = str(offers.get("itemCondition") or product.get("itemCondition") or "")
+        condition = _CONDITIONS.get(condition.rsplit("/", 1)[-1].lower())
+        listing.condition = listing.condition or condition
+        if str(offers.get("availability", "")).lower().endswith(("soldout", "outofstock")):
+            listing.details.setdefault("Availability", "sold")
+    return bool(description or images)
+
+
+def _apply_preview(listing, page):
+    """Last resort: the og:description / og:title preview tags."""
+    if not listing.title:
+        match = _OG_TITLE_RE.search(page)
+        listing.title = html.unescape(match.group(1)).strip() if match else listing.title
+    if listing.description:
+        return False
+    match = _OG_DESC_RE.search(page)
+    listing.description = (html.unescape(match.group(1)).strip() or None) if match else None
+    return bool(listing.description)
+
+
+def apply_item_page(listing, page):
+    """Fill the listing from an item page's HTML; returns the details source:
+    "page" (full page data), "jsonld" (product block only), "preview"
+    (og:description only) or "catalog" (nothing usable)."""
+    full = False
+    try:
+        plugins = _page_plugins(_flight_text(page), listing.id)
+        full = bool(plugins) and _apply_plugins(listing, plugins)
+    except Exception as e:  # keep the fallbacks working if the page data changes shape
+        logger.warning(f"AI filter: could not read the page data of item {listing.id}: {e}")
+    basic = _apply_jsonld(listing, page)
+    preview = _apply_preview(listing, page)
+    return "page" if full else "jsonld" if basic else "preview" if preview else "catalog"
 
 
 def fetch_details(listing):
-    """Fill in description, photos and details. Never raises; sets listing.source."""
+    """Fill in description, photos and details from the item page (one request).
+    Never raises; sets listing.source and, when something is missing, listing.source_note."""
     host = urlparse(listing.url).netloc or "www.vinted.hu"
     page_url = listing.url if listing.url.startswith("http") else f"https://{host}/items/{listing.id}"
-    notes = []
-    try:
-        r = _vinted_get(f"https://{host}/api/v2/items/{listing.id}", "application/json", page_url)
-        if r is not None and r.status_code == 200:
-            _apply_api_item(listing, r.json())
-            listing.source = "api"
-            return listing
-        notes.append(f"api HTTP {getattr(r, 'status_code', '?')}")
-    except Exception as e:
-        notes.append(f"api {e.__class__.__name__}: {str(e)[:80]}")
     try:
         r = _vinted_get(page_url, "text/html,application/xhtml+xml", f"https://{host}/")
-        if r is not None and r.status_code == 200:
-            _apply_page_html(listing, r.text)
-            listing.source = "page"
-            return listing
-        notes.append(f"page HTTP {getattr(r, 'status_code', '?')}")
+        if r is None or r.status_code != 200:
+            raise RuntimeError(f"item page HTTP {getattr(r, 'status_code', '?')}")
+        listing.source = apply_item_page(listing, r.text)
+        if listing.source != "page":
+            listing.source_note = "item page had no full listing data"
     except Exception as e:
-        notes.append(f"page {e.__class__.__name__}: {str(e)[:80]}")
-    listing.source = "catalog"
-    listing.source_note = "; ".join(notes)
-    logger.warning(f"AI filter: listing details unavailable for item {listing.id} ({listing.source_note})")
+        listing.source = "catalog"
+        listing.source_note = f"{e.__class__.__name__}: {str(e)[:120]}"
+    if listing.source == "catalog":
+        logger.warning(f"AI filter: listing details unavailable for item {listing.id} ({listing.source_note})")
     return listing
 
 

@@ -31,18 +31,21 @@ listing is never judged twice.
 ### Full listing
 
 Vinted's search results only carry the main photo, title, brand, size,
-condition and price. For each checked item the bot fetches the full listing
-through its own Vinted session:
+condition and price. For each checked item the bot loads the item page
+(`www.vinted.<tld>/items/<id>`) through its own Vinted session and reads, in
+order of preference:
 
-1. `www.vinted.<tld>/api/v2/items/<id>` (description, all photos, condition,
-   colour, measurements, seller rating), else
-2. the item page's JSON-LD product block (description, photos, brand, colour,
-   condition), else its `og:description`, else
-3. the search-result data only (main photo, no description). The verdict is
-   then stored with details source `catalog`, and the Items page says
-   "listing details were not available".
+| Details source | What the page gave |
+|---|---|
+| `page` | the page's embedded data: description, every photo, condition, size, brand and the other attributes (colour, material, author, ISBN, ...), seller rating and review count, reserved or not |
+| `jsonld` | only the schema.org product block: description, main photo, price, new/used |
+| `preview` | only the link-preview description (`og:description`), e.g. old or sold listings |
+| `catalog` | nothing usable (blocked, error): the check runs on search-result data, and the Items page says "listing details were not available" |
 
-That is one extra Vinted request per checked item (not per scraped item).
+That is one extra Vinted request per checked item (not per scraped item). The
+seller's username is never sent to the model, only their rating.
+`www.vinted.<tld>/api/v2/items/<id>` is not used: since the September 2026 API
+change it answers 404 to anonymous clients.
 
 ### Final decision
 
@@ -79,14 +82,14 @@ Table `ai_verdicts`, one row per checked item and query:
 | `final_decision`, `final_reason`, `notified` | outcome and whether it was sent (1/0) |
 | `vision_model`, `vision_decision`, `vision_reason`, `vision_tokens` | photos reviewer |
 | `text_model`, `text_decision`, `text_reason`, `text_tokens` | text reviewer |
-| `details_source` | `api`, `page` or `catalog` (see above) |
+| `details_source` | `page`, `jsonld`, `preview` or `catalog` (see above) |
 | `seconds` | total time for the check |
 
 The database is `data/vinted_notifications.db` on the data volume; open it with
 any SQLite tool, or from the container (the image has no `sqlite3` binary):
 
 ```sh
-docker exec <container> python -c "
+docker exec -u 10001:10001 vinted-notifications python -c "
 import sqlite3
 for r in sqlite3.connect('data/vinted_notifications.db').execute('''
     SELECT datetime(checked_at, 'unixepoch', 'localtime'), final_decision, notified,
@@ -126,19 +129,26 @@ or the web UI.
   shows each reviewer's answer, without saving.
 * **Items page:** each checked item shows the outcome (fits / doesn't fit /
   unsure / check failed, sent or skipped) with both reviewers' reasons.
-* **Shell checks** (inside the container, working directory `/app`):
+* **Shell checks** from the NAS. Run them as the bot's user (uid 10001) so no
+  root-owned files end up in the data folder, and quote the URL:
 
   ```sh
   # Does the full-listing fetch work? (no tokens used)
-  python ai_filter.py --item https://www.vinted.hu/items/123456-slug --details-only
+  docker exec -u 10001:10001 vinted-notifications python ai_filter.py \
+    --item "https://www.vinted.hu/items/<id>" --details-only
 
   # Full check of one listing against a filter text
-  python ai_filter.py --item https://www.vinted.hu/items/123456-slug \
+  docker exec -u 10001:10001 vinted-notifications python ai_filter.py \
+    --item "https://www.vinted.hu/items/<id>" \
     --intent "Only genuine Barbour waxed jackets, size L, no damage"
   ```
 
-  `Details source: api` or `page` means descriptions are reaching the text
-  model. `catalog` plus an error note means Vinted refused both routes.
+  Replace `<id>` with a real listing's number (for example from **View on
+  Vinted** on the Items page).
+
+  `Details source: page` means the full listing reaches both models. `jsonld`
+  or `preview` means only part of it did, and `catalog` plus an error note
+  means the item page could not be loaded.
 
 ### Writing a good filter text
 
