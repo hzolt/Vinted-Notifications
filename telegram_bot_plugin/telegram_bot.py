@@ -1,5 +1,5 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes
+from telegram.ext import ContextTypes, MessageHandler, filters
 from telegram.error import RetryAfter
 import db
 import core
@@ -26,6 +26,30 @@ async def hello(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             logger.error(f"Error sending error message: {str(e2)}")
 
 
+def allowed_chat_filter():
+    """Filter that only lets through updates from the configured telegram_chat_id.
+
+    Without it anyone who finds the bot could list, add or delete queries.
+    The chat id is a number (negative for groups) or a public @username.
+    """
+    chat_id = str(db.get_parameter("telegram_chat_id") or "").strip()
+    if chat_id.lstrip("-").isdigit():
+        return filters.Chat(chat_id=int(chat_id))
+    if chat_id:
+        return filters.Chat(username=chat_id.lstrip("@"))
+    return None
+
+
+async def ignore_unauthorized(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Log commands from other chats without answering them."""
+    chat = update.effective_chat
+    user = update.effective_user
+    logger.warning(
+        f"Ignored Telegram command from unauthorized chat {chat.id if chat else '?'}"
+        f" (user id {user.id if user else '?'})"
+    )
+
+
 class LeRobot:
     def __init__(self, queue):
         from telegram import Bot
@@ -41,19 +65,30 @@ class LeRobot:
             # Create the item queue to send to telegram
             self.new_items_queue = queue
 
-            # Handler verify if bot is running
-            self.app.add_handler(CommandHandler("hello", hello))
-            # Keyword handlers
-            self.app.add_handler(CommandHandler("add_query", self.add_query))
-            self.app.add_handler(CommandHandler("remove_query", self.remove_query))
-            self.app.add_handler(CommandHandler("queries", self.queries))
-            # Allowlist handlers
-            self.app.add_handler(
-                CommandHandler("clear_allowlist", self.clear_allowlist)
-            )
-            self.app.add_handler(CommandHandler("add_country", self.add_country))
-            self.app.add_handler(CommandHandler("remove_country", self.remove_country))
-            self.app.add_handler(CommandHandler("allowlist", self.allowlist))
+            # Commands are only accepted from the configured chat
+            allowed = allowed_chat_filter()
+            if allowed is None:
+                logger.error("telegram_chat_id is not set: Telegram commands are disabled")
+            else:
+                commands = {
+                    # Verify if bot is running
+                    "hello": hello,
+                    # Keyword handlers
+                    "add_query": self.add_query,
+                    "remove_query": self.remove_query,
+                    "queries": self.queries,
+                    # Allowlist handlers
+                    "clear_allowlist": self.clear_allowlist,
+                    "add_country": self.add_country,
+                    "remove_country": self.remove_country,
+                    "allowlist": self.allowlist,
+                }
+                for command, callback in commands.items():
+                    self.app.add_handler(
+                        CommandHandler(command, callback, filters=allowed)
+                    )
+            # Anything else that looks like a command is logged and not answered
+            self.app.add_handler(MessageHandler(filters.COMMAND, ignore_unauthorized))
 
             # TODO : Help command
 
