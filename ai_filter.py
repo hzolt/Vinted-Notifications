@@ -172,7 +172,7 @@ class Listing:
     description: str = None
     photos: list = field(default_factory=list)
     details: dict = field(default_factory=dict)  # extra label -> value
-    source: str = "catalog"  # catalog | api | page
+    source: str = "catalog"  # page | jsonld | preview | catalog (see fetch_details)
     source_note: str = ""
 
 
