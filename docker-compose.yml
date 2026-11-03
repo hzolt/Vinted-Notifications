@@ -3,7 +3,7 @@ version: "3"
 services:
   vinted-notifications:
     container_name: vinted-notifications
-    # Built from this fork by .github/workflows/build.yml on every push to main
+    # :latest = the latest published release of this fork (:main = test build of main)
     image: ghcr.io/hzolt/vinted-notifications:latest
     pull_policy: always
     init: true

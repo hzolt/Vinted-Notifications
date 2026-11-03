@@ -12,7 +12,7 @@ logger = get_logger(__name__)
 
 async def hello(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
-        ver = db.get_parameter("version")
+        ver = core.get_app_version()
         await update.message.reply_text(
             f"Hello {update.effective_user.first_name}! Vinted-Notifications is running under version {ver}.\n"
         )

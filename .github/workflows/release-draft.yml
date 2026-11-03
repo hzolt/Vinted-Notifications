@@ -1,0 +1,90 @@
+name: Update draft release
+
+# Keeps one draft release up to date with every commit on main since the last
+# published release. When you are ready: open the draft, set the tag (e.g.
+# v1.01, "Create new tag on publish"), edit the text if you like and publish.
+# Publishing creates the tag on main and builds the release image.
+#
+# Only the part between the two "auto" markers is rewritten on each push, so
+# text you add above or below it in the draft is kept.
+
+on:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+  workflow_dispatch:
+
+concurrency:
+  group: release-draft
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  draft:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history and tags)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Update the draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          git fetch --tags --force
+
+          # Last published (non-draft, non-pre-release) release
+          last_tag=$(gh release list --repo "$REPO" --exclude-drafts --exclude-pre-releases \
+            --limit 1 --json tagName --jq '.[0].tagName // ""')
+
+          if [ -n "$last_tag" ]; then
+            range="$last_tag..HEAD"
+            since="since $last_tag"
+            compare="https://github.com/$REPO/compare/$last_tag...main"
+          else
+            range="HEAD"
+            since="(first release)"
+            compare=""
+          fi
+
+          changes=$(git log --no-merges --pretty='- %s (%h)' "$range" \
+            | grep -v -E '^- (Merge |Update draft release)' || true)
+
+          {
+            echo "<!-- auto:start -->"
+            echo "## Changes $since"
+            echo
+            if [ -n "$changes" ]; then echo "$changes"; else echo "No changes yet."; fi
+            if [ -n "$compare" ]; then echo; echo "Full diff: $compare"; fi
+            echo "<!-- auto:end -->"
+          } > auto.md
+
+          # Existing draft, if any (its tag may already be set to the next version)
+          draft_tag=$(gh release list --repo "$REPO" --limit 50 --json tagName,isDraft \
+            --jq '[.[] | select(.isDraft)][0].tagName // ""')
+
+          if [ -n "$draft_tag" ]; then
+            gh release view "$draft_tag" --repo "$REPO" --json body --jq .body > old.md
+            python3 - <<'PY'
+          import re
+          old = open("old.md", encoding="utf-8").read()
+          auto = open("auto.md", encoding="utf-8").read().strip()
+          pattern = re.compile(r"<!-- auto:start -->.*?<!-- auto:end -->", re.S)
+          new = pattern.sub(lambda m: auto, old) if pattern.search(old) else (old.rstrip() + "\n\n" + auto).strip()
+          open("body.md", "w", encoding="utf-8").write(new + "\n")
+          PY
+            gh release edit "$draft_tag" --repo "$REPO" --draft --notes-file body.md
+            echo "Updated draft release $draft_tag"
+          else
+            cp auto.md body.md
+            gh release create next --repo "$REPO" --draft --target main \
+              --title "Next release" --notes-file body.md
+            echo "Created draft release"
+          fi

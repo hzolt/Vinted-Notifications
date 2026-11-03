@@ -156,7 +156,7 @@
             <span class="version-info text-light me-3 d-none d-md-flex align-items-center">
                             {% if is_up_to_date %}
                                 <i class="bi bi-check-circle-fill text-success me-2"
-                                   style="text-shadow: 0 0 3px rgba(0,0,0,0.5);"></i> v{{ current_version }}
+                                   style="text-shadow: 0 0 3px rgba(0,0,0,0.5);"></i> {{ 'v' if current_version and current_version[:1].isdigit() else '' }}{{ current_version }}
                             {% else %}
                                 <i class="bi bi-exclamation-circle-fill text-warning me-2"></i> Update: {{ latest_version }}
                             {% endif %}

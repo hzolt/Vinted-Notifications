@@ -151,11 +151,35 @@ or the web UI.
 
 ## Deploying
 
-This fork carries `.github/workflows/build.yml`, which builds the image on
-every push to `main` and publishes it as
-`ghcr.io/<your-github-user>/vinted-notifications:latest`. Make the package
-public once (GitHub → Packages → vinted-notifications → Package settings →
-Change visibility) so the NAS can pull it without credentials.
+Images are built by `.github/workflows/build.yml` and published to
+`ghcr.io/<your-github-user>/vinted-notifications`:
+
+| Event | Image tags |
+|---|---|
+| push to `main` | `:main` (test build, version shown as `main-<commit>`) |
+| release published | `:<tag>` (e.g. `:v1.01`) and `:latest` |
+| pre-release published | `:<tag>` only |
+
+The NAS runs `:latest`, so it only changes when you publish a release. Make
+the package public once (GitHub → Packages → vinted-notifications → Package
+settings → Change visibility) so the NAS can pull it without credentials.
+
+### Releasing
+
+1. Work on the code and push/merge to `main` as often as you like. After each
+   push, `.github/workflows/release-draft.yml` updates a **draft release**
+   listing every commit since the last published release.
+2. When you are ready: GitHub → Releases → open the draft → Edit.
+3. Choose a tag: type the new version (e.g. `v1.01`) and pick "Create new tag
+   on publish" (target `main`). Change the title and add text if you like; only
+   the part between the `auto` markers is rewritten by later pushes.
+4. Publish. The tag is created on `main`, the image is built as `:v1.01` and
+   `:latest`, and a fresh draft starts for the next release.
+
+The web UI header shows the running version (the release tag baked into the
+image) and "Update available" when a newer release is published in this
+repository. `:main` test builds never report an update. Set `UPDATE_CHECK_REPO`
+to follow a different repository.
 
 ```yaml
 services:
@@ -171,7 +195,8 @@ services:
 
 Keep the existing data volume: the `ai_verdicts` table and `queries.ai_intent`
 column are created on first start; nothing else in the database changes.
-Watchtower can keep updating the image as usual.
+Watchtower can keep updating the image as usual; it picks up each published
+release.
 
 To build locally instead: `docker build -t vinted-notifications:ai .` in this
 folder, use `image: vinted-notifications:ai`, drop `pull_policy: always` and

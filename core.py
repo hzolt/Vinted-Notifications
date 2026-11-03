@@ -1,5 +1,6 @@
 import db
 import html
+import os
 import time
 import requests
 import ai_filter
@@ -454,6 +455,11 @@ def contains_banwords(title, banwords_str):
     return False
 
 
+# Repository whose releases the update check follows (this fork by default)
+UPDATE_CHECK_REPO = (
+    os.environ.get("UPDATE_CHECK_REPO") or "https://github.com/hzolt/Vinted-Notifications"
+).rstrip("/")
+
 # check_version() runs on every web UI page render, so its result is cached and
 # the GitHub request has a short timeout: a slow GitHub must not stall the UI.
 VERSION_CHECK_TTL = 6 * 60 * 60
@@ -461,19 +467,36 @@ VERSION_CHECK_TIMEOUT = 5
 _version_cache = {"checked_at": 0.0, "key": None, "result": None}
 
 
+def _strip_v(version):
+    version = (version or "").strip()
+    return version[1:] if version[:1] in ("v", "V") and version[1:2].isdigit() else version
+
+
+def get_app_version():
+    """Version of the running image: the release tag it was built from
+    (APP_VERSION, set at build time), else the database schema version."""
+    return _strip_v(os.environ.get("APP_VERSION") or db.get_parameter("version") or "dev")
+
+
+def _is_release_version(version):
+    return version[:1].isdigit()
+
+
 def check_version():
     """
     Check if the application is up to date.
 
-    Returns (is_up_to_date, current_version, latest_version, github_url). The
-    result is cached for VERSION_CHECK_TTL seconds; failures are cached too so an
-    unreachable GitHub is not retried on every page load.
+    Returns (is_up_to_date, current_version, latest_version, github_url).
+    The running version comes from get_app_version() and is compared with the
+    latest published release of UPDATE_CHECK_REPO. Test builds from main
+    ("main-<commit>") and local builds ("dev") never report an update. The
+    result is cached for VERSION_CHECK_TTL seconds; failures are cached too so
+    an unreachable GitHub is not retried on every page load.
     """
+    github_url = UPDATE_CHECK_REPO
     ver = None
-    github_url = None
     try:
-        github_url = db.get_parameter("github_url")
-        ver = db.get_parameter("version")
+        ver = get_app_version()
         key = (github_url, ver)
         now = time.monotonic()
         if (
@@ -485,12 +508,17 @@ def check_version():
 
         result = (True, ver, ver, github_url)  # if we can't check, assume up to date
         try:
+            # /releases/latest redirects to /releases/tag/<tag>, or to /releases
+            # when nothing has been published yet
             response = requests.get(
                 f"{github_url}/releases/latest", timeout=VERSION_CHECK_TIMEOUT
             )
-            if response.status_code == 200:
-                latest_version = response.url.split("/")[-1]
-                result = (ver == latest_version, ver, latest_version, github_url)
+            if response.status_code == 200 and "/releases/tag/" in response.url:
+                latest_version = _strip_v(response.url.rstrip("/").split("/")[-1])
+                is_up_to_date = (
+                    not _is_release_version(ver) or ver == latest_version
+                )
+                result = (is_up_to_date, ver, latest_version, github_url)
         except requests.RequestException as e:
             logger.warning(f"Could not check for a new version: {e}")
 

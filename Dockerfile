@@ -24,6 +24,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the rest of the application
 COPY . .
 
+# Version shown in the web UI and compared with the latest GitHub release.
+# Set by the build workflow: the release tag, or main-<commit> for test builds.
+ARG APP_VERSION=dev
+ENV APP_VERSION=${APP_VERSION}
+
 # EntryPoint script (added below)
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh

@@ -1,9 +1,21 @@
 name: Build and push image
 
+# push to main      -> ghcr.io/<owner>/vinted-notifications:main  (test builds)
+# release published -> ghcr.io/<owner>/vinted-notifications:<tag> and :latest
+#
+# The NAS runs :latest, so it only changes when a release is published.
+# A pre-release gets its own tag but does not move :latest.
+
 on:
   push:
     branches: [main]
+  release:
+    types: [published]
   workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -22,13 +34,31 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Compute lowercase image name
+      - name: Compute image name and version
         run: |
           echo "IMAGE=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/vinted-notifications" >> "$GITHUB_ENV"
+          if [ "${{ github.event_name }}" = "release" ]; then
+            echo "APP_VERSION=${{ github.event.release.tag_name }}" >> "$GITHUB_ENV"
+          else
+            echo "APP_VERSION=main-$(echo '${{ github.sha }}' | cut -c1-7)" >> "$GITHUB_ENV"
+          fi
+
+      - name: Image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=raw,value=main,enable=${{ github.event_name != 'release' }}
+            type=raw,value=${{ github.event.release.tag_name }},enable=${{ github.event_name == 'release' }}
+            type=raw,value=latest,enable=${{ github.event_name == 'release' && !github.event.release.prerelease }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          tags: ${{ env.IMAGE }}:latest
+          build-args: APP_VERSION=${{ env.APP_VERSION }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
