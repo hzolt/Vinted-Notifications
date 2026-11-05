@@ -532,6 +532,9 @@ def logs():
     return render_template("logs.html")
 
 
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
 @app.route("/api/logs")
 def api_logs():
     offset = _int_arg(request.args, "offset", 0)
@@ -565,6 +568,8 @@ def api_logs():
                 match = re.match(log_pattern, line.strip())
                 if match:
                     timestamp, module, level, message = match.groups()
+                    # werkzeug colours its lines with ANSI escape codes
+                    message = _ANSI_RE.sub("", message)
 
                     # Apply level filter if specified
                     if level_filter != "all" and level != level_filter:
