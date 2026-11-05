@@ -1,10 +1,18 @@
 import logging
 import os
+import re
 import sys
 from logging.handlers import RotatingFileHandler
 
 # Create logs directory if it doesn't exist
 os.makedirs("logs", exist_ok=True)
+
+
+# werkzeug's errors for requests that aren't HTTP at all (e.g. a TLS handshake
+# sent to the plain-HTTP web UI). They carry only fragments of the binary data.
+_MALFORMED_REQUEST = re.compile(
+    r"code 400, message (Bad request version|Bad request syntax|Bad HTTP/0\.9 request type)"
+)
 
 
 # Custom filter to exclude specific log messages
@@ -35,6 +43,23 @@ class ExcludeFilter(logging.Filter):
         # Filter out log refresh requests from the web UI
         if record.name == "werkzeug" and "GET /api/logs" in record.getMessage():
             return False
+
+        if record.name == "werkzeug":
+            message = record.getMessage()
+            # The web UI speaks plain HTTP. A client trying HTTPS on its port (a
+            # monitor or port scanner) sends a TLS ClientHello, which starts with
+            # bytes 16 03; werkzeug logs one garbled 400 line plus one ERROR per
+            # attempt. Harmless, and it buries the real log entries.
+            if (
+                "\\x16\\x03" in message
+                or "\x16\x03" in message
+                or _MALFORMED_REQUEST.search(message)
+                or ('" 400 -' in message and ("\\x" in message or "\x16" in message))
+            ):
+                return False
+            # Uptime/health probes
+            if '"HEAD / HTTP/1.1" 200' in message or '"HEAD / HTTP/1.0" 200' in message:
+                return False
 
         return True
 
