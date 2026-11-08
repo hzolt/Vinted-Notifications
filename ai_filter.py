@@ -567,7 +567,7 @@ def _post(s, payload):
     for attempt in range(1, _ATTEMPTS + 1):
         last = attempt == _ATTEMPTS
         try:
-            response = _session.post(url, headers=headers, json=payload, timeout=s["timeout"])
+            response = _session.post(url, headers=headers, json=payload, timeout=(10, s["timeout"]))  # Connect timeout, read timeout
         except requests.ConnectionError as e:
             if last or isinstance(e, requests.Timeout):
                 raise
