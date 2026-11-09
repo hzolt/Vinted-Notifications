@@ -74,8 +74,8 @@ A sent message ends with:
 
 ```
 🤖 AI: fits
-👁 yes: Eredeti Bedale, ép cipzár
-📝 yes: L méret, „alig hordott”, nincs hiba
+👁 yes: Genuine Bedale, zip intact
+📝 yes: Size L, "barely worn", no defects
 ```
 
 When the item page could not be read it adds `ℹ️ listing page unavailable:
@@ -186,8 +186,8 @@ or the web UI.
   with what text states (size, measurements, defects, "never worn"); each
   reviewer picks the parts it can judge.
 * Say what you don't want ("no replicas", "no bundles", "nothing for parts").
-* Hungarian or English both work; reasons come back in the language you wrote
-  the filter in.
+* Hungarian or English both work; the reviewers' reasons are always in
+  English.
 
 ## Deploying
 
