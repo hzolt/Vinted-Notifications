@@ -40,7 +40,14 @@ order of preference:
 | `page` | the page's embedded data: description, every photo, condition, size, brand and the other attributes (colour, material, author, ISBN, ...), seller rating and review count, reserved or not |
 | `jsonld` | only the schema.org product block: description, main photo, price, new/used |
 | `preview` | only the link-preview description (`og:description`), e.g. old or sold listings |
-| `catalog` | nothing usable (blocked, error): the check runs on search-result data, and the Items page says "listing details were not available" |
+| `catalog` | nothing usable (blocked, error): the check runs on search-result data, the Items page says "listing details were not available" and the message says "listing page unavailable" |
+
+If the page comes back without any listing data, or the token is rejected,
+the bot starts a new Vinted session and tries once more: Vinted's access token
+expires about a day after it was handed out, and from then on the item page
+still answers HTTP 200, only without the listing in it. A dropped connection
+or a timeout is retried once. When it still fails, the log line names the
+page that came back (final URL, type, size, title).
 
 That is one extra Vinted request per checked item (not per scraped item). The
 seller's username is never sent to the model, only their rating.
@@ -69,6 +76,29 @@ A sent message ends with:
 🤖 AI: fits
 👁 yes: Eredeti Bedale, ép cipzár
 📝 yes: L méret, „alig hordott”, nincs hiba
+```
+
+When the item page could not be read it adds `ℹ️ listing page unavailable:
+checked on search-result data only`.
+
+### Connections and retries
+
+Checks can be hours apart, and a kept-alive connection that sat idle that long
+is often dead: reusing one either failed at once or hung until the timeout. So
+every model call opens a new connection (one TLS handshake, a fraction of a
+second), and so does each check's batch of photo downloads.
+
+* **Model calls:** a dropped connection, a DNS hiccup or HTTP 502/503/504 is
+  retried up to twice; 429 waits for `Retry-After` (up to 30 s); a timeout is
+  retried once, so one call waits at most about twice `AI_FILTER_TIMEOUT`.
+  Other errors (401, 402, 404, ...) are not retried.
+* **Item page:** see [Full listing](#full-listing).
+
+Checks run one after another, so while one waits nothing else is announced.
+The log line of each check shows where the time went:
+
+```
+AI filter [query 3] YES (6.4 s, 3120 in-tokens, details: page in 1.1 s) | photos=yes (5.2 s): ... | text=yes (2.9 s): ...
 ```
 
 ### What is stored
@@ -111,8 +141,8 @@ for r in sqlite3.connect('data/vinted_notifications.db').execute('''
 | `AI_FILTER_COMBINE` | `veto` | `veto` or `strict`, see above. |
 | `AI_FILTER_NOTIFY_MAYBE` | `true` | Send when the outcome is `maybe`. |
 | `AI_FILTER_FAIL_OPEN` | `true` | Send when no reviewer could answer. |
-| `AI_FILTER_BASE_URL` | `https://nano-gpt.com/api/subscription/v1` | Subscription-only endpoint: never spends prepaid balance. |
-| `AI_FILTER_TIMEOUT` | `90` | Seconds per model call. |
+| `AI_FILTER_BASE_URL` | `https://api.nano-gpt.com/api/subscription/v1` | NanoGPT's host for API-key use (larger and longer-running requests than the website host `nano-gpt.com`). Subscription-only endpoint: never spends prepaid balance. |
+| `AI_FILTER_TIMEOUT` | `60` | Seconds to wait for a model's answer; a timeout is retried once. Normal answers take 3–15 s. |
 | `AI_FILTER_MAX_TOKENS` | `2000` | Output budget per call; reasoning models need room. Output tokens don't count against the weekly allowance. |
 | `AI_FILTER_IMAGE_MAX_PX` | `768` | Photos are downscaled and sent as JPEG; smaller = fewer input tokens. |
 
