@@ -3,6 +3,12 @@
 {% block title %}Queries - Vinted Notifications{% endblock %}
 
 {% block content %}
+{% macro vision_help() -%}
+Extra instructions for the photos model only. With an AI filter, they are added to it for the photos model. Without
+one, nothing is filtered: every item is sent with the photos model's picture remarks.
+{%- if not vision_model_on %} <span class="text-warning">The vision model is off (AI_FILTER_VISION_MODEL), so these
+are not used.</span>{% endif %}
+{%- endmacro %}
 <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom">
     <h1 class="h2">Queries</h1>
 </div>
@@ -63,8 +69,23 @@
                                       rows="2"
                                       placeholder="e.g. Genuine items only, good or better condition, no visible stains, size M or L. Skip bundles and replicas."></textarea>
                             <div class="form-text">
-                                Describe in plain language what you want. New items from this query are sent to the
-                                model with their photo and only notified if they fit. Leave empty to notify on everything.
+                                Describe in plain language what you want. New items from this query are checked by
+                                both models (photos and text) and only notified if they fit. Leave empty to notify on
+                                everything.
+                            </div>
+                        </div>
+
+                        <!-- AI Vision filter (optional, fork addition) -->
+                        <div class="col-md-12">
+                            <label for="ai_vision_intent" class="form-label"><i class="bi bi-eye me-1"></i>AI Vision
+                                filter&nbsp;<span class="text-muted">(optional)</span></label>
+                            <textarea class="form-control"
+                                      id="ai_vision_intent"
+                                      name="ai_vision_intent"
+                                      rows="2"
+                                      placeholder="e.g. Look for damage, scratches and wear. Are these the seller's own photos or stock photos? Does it look genuine?"></textarea>
+                            <div class="form-text">
+                                {{ vision_help() }}
                             </div>
                         </div>
                     </div>
@@ -100,8 +121,14 @@
                             <td>{{ query.display }}</td>
                             <td class="small" style="max-width: 22rem;">
                                 {% if query.ai_intent %}
-                                <span title="{{ query.ai_intent }}"><i class="bi bi-robot text-info me-1"></i>{{ query.ai_intent|truncate(80) }}</span>
-                                {% else %}
+                                <div title="{{ query.ai_intent }}"><i class="bi bi-robot text-info me-1"></i>{{ query.ai_intent|truncate(80) }}</div>
+                                {% elif query.ai_vision_intent %}
+                                <div class="text-muted"><i class="bi bi-robot me-1"></i>not evaluated, picture remarks only</div>
+                                {% endif %}
+                                {% if query.ai_vision_intent %}
+                                <div title="{{ query.ai_vision_intent }}"><i class="bi bi-eye text-info me-1"></i>{{ query.ai_vision_intent|truncate(80) }}</div>
+                                {% endif %}
+                                {% if not query.ai_intent and not query.ai_vision_intent %}
                                 <span class="text-muted">&mdash;</span>
                                 {% endif %}
                             </td>
@@ -168,10 +195,23 @@
                                                                   name="ai_intent"
                                                                   rows="4"
                                                                   placeholder="Leave empty to notify on everything">{{ query.ai_intent }}</textarea>
+                                                    </div>
+                                                    <div class="mb-3">
+                                                        <label for="ai_vision_intent{{ query.id }}" class="form-label"><i
+                                                                class="bi bi-eye me-1"></i>AI Vision filter <span
+                                                                class="text-muted">(optional)</span></label>
+                                                        <textarea class="form-control"
+                                                                  id="ai_vision_intent{{ query.id }}"
+                                                                  name="ai_vision_intent"
+                                                                  rows="4"
+                                                                  placeholder="Extra instructions for the photos model. Leave empty to skip.">{{ query.ai_vision_intent }}</textarea>
                                                         <div class="form-text">
-                                                            "Test" runs this text against the last 3 items this query
-                                                            found (full listings, both models), without saving. It can
-                                                            take up to a minute.
+                                                            {{ vision_help() }}
+                                                        </div>
+                                                        <div class="form-text">
+                                                            "Test" runs these texts against the last 3 items this query
+                                                            found (full listings), without saving. It can take up to a
+                                                            minute.
                                                         </div>
                                                     </div>
                                                 </div>

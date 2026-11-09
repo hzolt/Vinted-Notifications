@@ -13,6 +13,9 @@ sent to Telegram/RSS:
 Both decisions and the final outcome are stored, shown on the **Items** page
 and logged. Queries without an AI filter text behave exactly as before.
 
+A query can also have an **AI Vision filter**: extra instructions only the
+photos reviewer gets (see [AI Vision filter](#ai-vision-filter)).
+
 ## How an item flows
 
 ```
@@ -70,6 +73,33 @@ can show (photos can't confirm a size; text can't show a stain).
 `AI_FILTER_COMBINE=strict` requires a `yes` from every reviewer that answered;
 anything less becomes `maybe`.
 
+### AI Vision filter
+
+Optional extra instructions for the photos reviewer, for things only photos
+can show, for example:
+
+> Especially look for damage, scratches and signs of wear. Check whether the
+> photos are the seller's own or stock photos. Try to tell whether the item(s)
+> are genuine.
+
+| AI filter | AI Vision filter | What happens |
+|---|---|---|
+| set | empty | as above; the photos reviewer gets the AI filter text only |
+| set | set | the photos reviewer gets the AI filter text **plus** the vision instructions and decides as above; the text reviewer gets the AI filter text only |
+| empty | set | **not evaluated, just vision checked**: only the photos reviewer runs, writes remarks following the instructions and decides nothing. Every item is sent, with the remarks |
+| empty | empty | no AI check |
+
+The message of a "just vision checked" item ends with:
+
+```
+🤖 AI: not evaluated, just vision checked
+👁 picture remarks: Light scratches on the cartridge label; seller's own photos; looks genuine
+```
+
+If the photos reviewer fails, the item is still sent, with `👁 picture remarks
+unavailable: <why>`. With `AI_FILTER_VISION_MODEL=off` the vision instructions
+are not used at all.
+
 A sent message ends with:
 
 ```
@@ -114,6 +144,11 @@ Table `ai_verdicts`, one row per checked item and query:
 | `text_model`, `text_decision`, `text_reason`, `text_tokens` | text reviewer |
 | `details_source` | `page`, `jsonld`, `preview` or `catalog` (see above) |
 | `seconds` | total time for the check |
+| `vision_intent` | the AI Vision filter instructions the photos reviewer got, if any |
+
+A "just vision checked" item has `final_decision` and `vision_decision`
+`remarks` (or `vision_decision` `error`), the remarks in `vision_reason`,
+`notified` 1 and no text reviewer columns.
 
 The database is `data/vinted_notifications.db` on the data volume; open it with
 any SQLite tool, or from the container (the image has no `sqlite3` binary):
@@ -151,12 +186,13 @@ or the web UI.
 
 ## Using it
 
-* **Queries page:** an "AI filter" box under the add form, a column in the
-  query list, a box in each query's Edit dialog, and a status line naming both
-  models.
-* **Test button** (Edit dialog): runs the text currently in the box against
-  the last 3 items that query found — full listings, both reviewers — and
-  shows each reviewer's answer, without saving.
+* **Queries page:** "AI filter" and "AI Vision filter" boxes under the add
+  form and in each query's Edit dialog, a column in the query list showing
+  both, and a status line naming both models.
+* **Test button** (Edit dialog): runs the texts currently in the boxes against
+  the last 3 items that query found — full listings — and shows each
+  reviewer's answer (or the picture remarks), without saving. An emptied box
+  is tested as empty.
 * **Items page:** each checked item shows the outcome (fits / doesn't fit /
   unsure / check failed, sent or skipped) with both reviewers' reasons.
 * **Shell checks** from the NAS. Run them as the bot's user (uid 10001) so no
@@ -171,6 +207,12 @@ or the web UI.
   docker exec -u 10001:10001 vinted-notifications python ai_filter.py \
     --item "https://www.vinted.hu/items/<id>" \
     --intent "Only genuine Barbour waxed jackets, size L, no damage"
+
+  # Add --vision-intent "..." for AI Vision filter instructions; on its own
+  # (without --intent) it shows the picture remarks
+  docker exec -u 10001:10001 vinted-notifications python ai_filter.py \
+    --item "https://www.vinted.hu/items/<id>" \
+    --vision-intent "Look for scratches and wear; seller's own photos or stock photos?"
   ```
 
   Replace `<id>` with a real listing's number (for example from **View on
@@ -186,6 +228,9 @@ or the web UI.
   with what text states (size, measurements, defects, "never worn"); each
   reviewer picks the parts it can judge.
 * Say what you don't want ("no replicas", "no bundles", "nothing for parts").
+* Put what only the photos can answer, and how closely to look, in the AI
+  Vision filter ("look for scratches and wear", "stock photos or the
+  seller's own?"); the text reviewer never sees it.
 * Hungarian or English both work; the reviewers' reasons are always in
   English.
 
@@ -233,8 +278,9 @@ services:
     # ports, volumes, restart: keep as they are
 ```
 
-Keep the existing data volume: the `ai_verdicts` table and `queries.ai_intent`
-column are created on first start; nothing else in the database changes.
+Keep the existing data volume: the `ai_verdicts` table and the
+`queries.ai_intent` and `queries.ai_vision_intent` columns are created on first
+start; nothing else in the database changes.
 Watchtower can keep updating the image as usual; it picks up each published
 release.
 
@@ -261,14 +307,16 @@ conflict.
 
 ## Database
 
-`queries.ai_intent` (TEXT) and the `ai_verdicts` table are created at startup
-if missing (idempotent). The `version` parameter is **not** changed, so the
+`queries.ai_intent` and `queries.ai_vision_intent` (TEXT), the `ai_verdicts`
+table and its `vision_intent` column are created at startup if missing
+(idempotent). The `version` parameter is **not** changed, so the
 built-in update check keeps working. The `items.ai_decision` / `items.ai_reason`
 columns added by the first single-model version are no longer used and can stay.
 
 ## Cost
 
 Roughly 3–5k input tokens per checked item for the photos (4 photos at 768 px)
-plus 1–2k for the text; the Test page and the `*_tokens` columns show the real
+plus 1–2k for the text (a "just vision checked" query uses only the photos
+part); the Test page and the `*_tokens` columns show the real
 figures. Only queries with an AI filter text use tokens, and only for items
 that would otherwise be sent.

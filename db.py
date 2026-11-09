@@ -135,7 +135,7 @@ def is_query_in_db(processed_query):
             conn.close()
 
 
-def add_query_to_db(query, name=None, ai_intent=None):
+def add_query_to_db(query, name=None, ai_intent=None, ai_vision_intent=None):
     conn = None
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -149,10 +149,16 @@ def add_query_to_db(query, name=None, ai_intent=None):
             cursor.execute(
                 "INSERT INTO queries (query, last_item) VALUES (?, NULL)", (query,)
             )
+        query_id = cursor.lastrowid
         if ai_intent:
             cursor.execute(
                 "UPDATE queries SET ai_intent=? WHERE id=?",
-                (ai_intent, cursor.lastrowid),
+                (ai_intent, query_id),
+            )
+        if ai_vision_intent:
+            cursor.execute(
+                "UPDATE queries SET ai_vision_intent=? WHERE id=?",
+                (ai_vision_intent, query_id),
             )
         conn.commit()
     except Exception:
@@ -255,25 +261,29 @@ AI_VERDICT_COLUMNS = [
     "final_decision", "final_reason", "notified",
     "vision_model", "vision_decision", "vision_reason", "vision_tokens",
     "text_model", "text_decision", "text_reason", "text_tokens",
-    "details_source", "seconds",
+    "details_source", "seconds", "vision_intent",
 ]
 
 
 def ensure_ai_schema():
-    """Create the AI filter column and table if missing. Safe to run every start.
+    """Create the AI filter columns and table if missing. Safe to run every start.
 
-    queries.ai_intent   the plain-language filter text
-    ai_verdicts         one row per checked item and query: both reviewers'
-                        decisions, the final outcome and whether it was sent
+    queries.ai_intent         the plain-language filter text
+    queries.ai_vision_intent  extra instructions for the vision model only
+                              (AI Vision filter)
+    ai_verdicts               one row per checked item and query: both
+                              reviewers' decisions, the final outcome and
+                              whether it was sent
     """
     conn = None
     try:
         conn = get_db_connection()
         added = False
         columns = [row[1] for row in conn.execute("PRAGMA table_info(queries)")]
-        if "ai_intent" not in columns:
-            conn.execute("ALTER TABLE queries ADD COLUMN ai_intent TEXT")
-            added = True
+        for column in ("ai_intent", "ai_vision_intent"):
+            if column not in columns:
+                conn.execute(f"ALTER TABLE queries ADD COLUMN {column} TEXT")
+                added = True
         exists = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ai_verdicts'"
         ).fetchone()
@@ -297,9 +307,14 @@ def ensure_ai_schema():
                     text_tokens     INTEGER,
                     details_source  TEXT,
                     seconds         REAL,
+                    vision_intent   TEXT,
                     PRIMARY KEY (item_id, query_id)
                 )"""
             )
+            added = True
+        verdict_columns = [row[1] for row in conn.execute("PRAGMA table_info(ai_verdicts)")]
+        if "vision_intent" not in verdict_columns:
+            conn.execute("ALTER TABLE ai_verdicts ADD COLUMN vision_intent TEXT")
             added = True
         conn.commit()
         return added
@@ -373,13 +388,40 @@ def get_query_ai_intent(query_id):
 
 def get_query_ai_intents():
     """Return {query_id: ai_intent} for queries that have one."""
+    return _get_query_texts("ai_intent")
+
+
+def set_query_ai_intent(query_id, ai_intent):
+    return _set_query_text(query_id, "ai_intent", ai_intent)
+
+
+def get_query_ai_vision_intent(query_id):
+    """The query's AI Vision filter instructions, or None."""
+    return _get_query_texts("ai_vision_intent").get(query_id)
+
+
+def get_query_ai_vision_intents():
+    """Return {query_id: ai_vision_intent} for queries that have one."""
+    return _get_query_texts("ai_vision_intent")
+
+
+def set_query_ai_vision_intent(query_id, ai_vision_intent):
+    return _set_query_text(query_id, "ai_vision_intent", ai_vision_intent)
+
+
+_AI_QUERY_COLUMNS = ("ai_intent", "ai_vision_intent")
+
+
+def _get_query_texts(column):
+    """Return {query_id: text} for queries with a non-empty value in `column`."""
+    assert column in _AI_QUERY_COLUMNS
     conn = None
     try:
         conn = sqlite3.connect(DB_PATH)
         rows = conn.execute(
-            "SELECT id, ai_intent FROM queries WHERE ai_intent IS NOT NULL AND TRIM(ai_intent) != ''"
+            f"SELECT id, {column} FROM queries WHERE {column} IS NOT NULL AND TRIM({column}) != ''"
         ).fetchall()
-        return {row[0]: row[1] for row in rows}
+        return {row[0]: row[1].strip() for row in rows}
     except Exception:
         print_exc()
         return {}
@@ -388,12 +430,14 @@ def get_query_ai_intents():
             conn.close()
 
 
-def set_query_ai_intent(query_id, ai_intent):
+def _set_query_text(query_id, column, text):
+    """Store a query's text in `column`; empty text is stored as NULL."""
+    assert column in _AI_QUERY_COLUMNS
     conn = None
     try:
         conn = sqlite3.connect(DB_PATH)
-        value = ai_intent.strip() if ai_intent and ai_intent.strip() else None
-        conn.execute("UPDATE queries SET ai_intent=? WHERE id=?", (value, query_id))
+        value = text.strip() if text and text.strip() else None
+        conn.execute(f"UPDATE queries SET {column}=? WHERE id=?", (value, query_id))
         conn.commit()
         return True
     except Exception:

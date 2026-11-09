@@ -149,6 +149,7 @@ def queries():
     # Get queries
     all_queries = db.get_queries()
     ai_intents = db.get_query_ai_intents()
+    ai_vision_intents = db.get_query_ai_vision_intents()
     formatted_queries = []
     for i, query in enumerate(all_queries):
         parsed_query = urlparse(query[1])
@@ -177,11 +178,15 @@ def queries():
                 "display": query_name if query_name else query[1],
                 "last_found_item": last_found_item,
                 "ai_intent": ai_intents.get(query[0], ""),
+                "ai_vision_intent": ai_vision_intents.get(query[0], ""),
             }
         )
 
     return render_template(
-        "queries.html", queries=formatted_queries, ai_status=ai_filter.status()
+        "queries.html",
+        queries=formatted_queries,
+        ai_status=ai_filter.status(),
+        vision_model_on=bool(ai_filter.settings()["vision_model"]),
     )
 
 
@@ -190,11 +195,13 @@ def add_query():
     query = request.form.get("query")
     query_name = request.form.get("query_name", "").strip()
     ai_intent = request.form.get("ai_intent", "").strip()
+    ai_vision_intent = request.form.get("ai_vision_intent", "").strip()
     if query:
         message, is_new_query = core.process_query(
             query,
             name=query_name if query_name != "" else None,
             ai_intent=ai_intent or None,
+            ai_vision_intent=ai_vision_intent or None,
         )
         if is_new_query:
             flash(f"Query added: {query}", "success")
@@ -240,6 +247,10 @@ def update_query(query_id):
         if success:
             if "ai_intent" in request.form:
                 db.set_query_ai_intent(query_id, request.form.get("ai_intent", ""))
+            if "ai_vision_intent" in request.form:
+                db.set_query_ai_vision_intent(
+                    query_id, request.form.get("ai_vision_intent", "")
+                )
             flash("Query updated", "success")
         else:
             flash(message, "error")
@@ -251,19 +262,34 @@ def update_query(query_id):
 
 @app.route("/ai_test/<int:query_id>", methods=["POST"])
 def ai_test(query_id):
-    """Run an AI filter text against the last items this query found."""
-    ai_intent = request.form.get("ai_intent", "").strip() or db.get_query_ai_intent(
-        query_id
-    )
+    """Run the AI filter texts against the last items this query found.
+
+    The texts are taken from the form as they are (an emptied box means
+    "test without it"); the saved ones are used only if a field is missing."""
+    ai_intent = (
+        request.form["ai_intent"]
+        if "ai_intent" in request.form
+        else db.get_query_ai_intent(query_id) or ""
+    ).strip()
+    ai_vision_intent = (
+        request.form["ai_vision_intent"]
+        if "ai_vision_intent" in request.form
+        else db.get_query_ai_vision_intent(query_id) or ""
+    ).strip()
     query_row = next((q for q in db.get_queries() if q[0] == query_id), None)
     if query_row is None:
         flash("Query not found", "error")
         return redirect(url_for("queries"))
-    if not ai_intent:
-        flash("Write an AI filter text first", "warning")
-        return redirect(url_for("queries"))
     if not ai_filter.is_enabled():
         flash(ai_filter.status()["text"], "warning")
+        return redirect(url_for("queries"))
+    mode = ai_filter.check_mode(ai_intent, ai_vision_intent)
+    if mode is None:
+        if ai_vision_intent:
+            flash("The vision model is off (AI_FILTER_VISION_MODEL), so AI Vision filter "
+                  "instructions alone do nothing. Write an AI filter text too.", "warning")
+        else:
+            flash("Write an AI filter or AI Vision filter text first", "warning")
         return redirect(url_for("queries"))
 
     limit = _int_arg(request.form, "limit", 3, minimum=1, maximum=10)
@@ -279,13 +305,18 @@ def ai_test(query_id):
             currency=item[3] or "",
             photos=[item[6]] if item[6] else [],
         )
-        evaluation = ai_filter.evaluate(ai_intent, listing)
+        evaluation = ai_filter.evaluate(
+            ai_intent, listing, vision_intent=ai_vision_intent
+        )
         results.append({"listing": listing, "ev": evaluation})
     name = query_row[3] or query_row[1]
     return render_template(
         "ai_test.html",
         query_name=name,
         ai_intent=ai_intent,
+        ai_vision_intent=ai_vision_intent,
+        mode=mode,
+        vision_model_on=bool(ai_filter.settings()["vision_model"]),
         results=results,
         ai_status=ai_filter.status(),
     )
