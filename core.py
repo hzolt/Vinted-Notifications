@@ -17,7 +17,7 @@ logger = get_logger(__name__)
 MAX_NOTIFICATIONS_PER_RUN = 10
 
 
-def process_query(query, name=None, ai_intent=None):
+def process_query(query, name=None, ai_intent=None, ai_vision_intent=None):
     """
     Process a Vinted query URL by:
     1. Checking if the URL is a brand URL and converting it to standard format if needed
@@ -32,6 +32,7 @@ def process_query(query, name=None, ai_intent=None):
         query (str): The Vinted query URL
         name (str, optional): A name for the query. If provided, it will be used as the query name.
         ai_intent (str, optional): Plain-language AI filter text for this query.
+        ai_vision_intent (str, optional): AI Vision filter instructions (vision model only).
 
     Returns:
         tuple: (message, is_new_query)
@@ -89,7 +90,8 @@ def process_query(query, name=None, ai_intent=None):
         return "Query already exists.", False
     else:
         # add the query to the db
-        db.add_query_to_db(processed_query, name, ai_intent=ai_intent)
+        db.add_query_to_db(processed_query, name, ai_intent=ai_intent,
+                           ai_vision_intent=ai_vision_intent)
         return "Query added.", True
 
 
@@ -393,13 +395,18 @@ def clear_item_queue(items_queue, new_items_queue):
         # AI filter (fork addition). Runs after first-run priming and the cap, so
         # tokens are only spent on items that would otherwise be announced. Every
         # item here is already recorded in the db, so a rejected one is not judged
-        # again on the next run.
-        ai_intent = db.get_query_ai_intent(query_id) if ai_filter.is_enabled() else None
+        # again on the next run. With only AI Vision filter instructions the
+        # vision model adds picture remarks and nothing is filtered.
+        ai_intent = ai_vision_intent = ai_mode = None
+        if ai_filter.is_enabled():
+            ai_intent = db.get_query_ai_intent(query_id)
+            ai_vision_intent = db.get_query_ai_vision_intent(query_id)
+            ai_mode = ai_filter.check_mode(ai_intent, ai_vision_intent)
 
         for item in to_notify:
             ai_note = None
-            if ai_intent:
-                evaluation = ai_filter.evaluate_item(item, ai_intent)
+            if ai_mode:
+                evaluation = ai_filter.evaluate_item(item, ai_intent, ai_vision_intent)
                 db.save_ai_verdict(item.id, query_id, ai_intent, evaluation.to_row())
                 logger.info(
                     f"AI filter [query {query_id}] {evaluation.summary()}"

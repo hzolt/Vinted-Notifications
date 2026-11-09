@@ -3,8 +3,9 @@
 {% block title %}AI filter test - Vinted Notifications{% endblock %}
 
 {% macro decision_badge(d) -%}
-{%- set colours = {'yes': 'bg-success', 'no': 'bg-secondary', 'maybe': 'bg-warning text-dark', 'error': 'bg-danger'} -%}
-<span class="badge {{ colours.get(d, 'bg-light text-dark') }}">{{ d }}</span>
+{%- set colours = {'yes': 'bg-success', 'no': 'bg-secondary', 'maybe': 'bg-warning text-dark', 'error': 'bg-danger', 'remarks': 'bg-info text-dark'} -%}
+{%- set words = {'remarks': 'not evaluated'} -%}
+<span class="badge {{ colours.get(d, 'bg-light text-dark') }}">{{ words.get(d, d) }}</span>
 {%- endmacro %}
 
 {% block content %}
@@ -16,7 +17,12 @@
 <div class="card mb-4">
     <div class="card-body">
         <div class="mb-2"><strong>Query:</strong> {{ query_name }}</div>
-        <div class="mb-2"><strong>AI filter:</strong> {{ ai_intent }}</div>
+        <div class="mb-2"><strong><i class="bi bi-robot me-1"></i>AI filter:</strong>
+            {% if ai_intent %}{{ ai_intent }}{% else %}<span class="text-muted">(empty) &mdash; not evaluated, just vision checked: nothing is filtered</span>{% endif %}</div>
+        {% if ai_vision_intent %}
+        <div class="mb-2"><strong><i class="bi bi-eye me-1"></i>AI Vision filter:</strong> {{ ai_vision_intent }}
+            {% if not vision_model_on %}<span class="text-warning">(not used: the vision model is off)</span>{% endif %}</div>
+        {% endif %}
         <div class="text-muted small">{{ ai_status.text }} Nothing was saved.</div>
     </div>
 </div>
@@ -53,8 +59,8 @@
                         {{ decision_badge(ev.decision) }}
                         <div class="small text-muted">{{ 'would notify' if ev.notify else 'would skip' }}</div>
                     </td>
-                    <td class="small">{% if ev.vision %}{{ decision_badge(ev.vision.decision) }} {{ ev.vision.reason }}{% else %}<span class="text-muted">off</span>{% endif %}</td>
-                    <td class="small">{% if ev.text %}{{ decision_badge(ev.text.decision) }} {{ ev.text.reason }}{% else %}<span class="text-muted">off</span>{% endif %}</td>
+                    <td class="small">{% if ev.vision %}{% if ev.vision.decision == 'remarks' %}<i class="bi bi-eye me-1"></i><b>picture remarks:</b>{% else %}{{ decision_badge(ev.vision.decision) }}{% endif %} {{ ev.vision.reason }}{% else %}<span class="text-muted">off</span>{% endif %}</td>
+                    <td class="small">{% if ev.text %}{{ decision_badge(ev.text.decision) }} {{ ev.text.reason }}{% elif mode == 'remarks' %}<span class="text-muted">not run (no AI filter)</span>{% else %}<span class="text-muted">off</span>{% endif %}</td>
                     <td class="text-end small text-muted">{{ '%.1f'|format(ev.seconds) }} s<br>{{ ev.input_tokens }}</td>
                 </tr>
                 {% else %}
