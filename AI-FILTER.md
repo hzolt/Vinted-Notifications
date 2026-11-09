@@ -25,6 +25,8 @@ seen before? -> country allowlist -> banwords -> recorded as seen
    -> AI filter (only if the query has one):
         fetch full listing -> photos reviewer ┐ in parallel
                               text reviewer   ┘ -> final decision -> notify?
+   -> seller's rating (from the item page; fetched now if the AI check didn't)
+   -> sent
 ```
 
 The AI check runs last, so tokens are only spent on items that would otherwise
@@ -92,24 +94,41 @@ can show, for example:
 The message of a "just vision checked" item ends with:
 
 ```
+👤 Seller: rating 5.0/5 from 14 reviews
 🤖 AI: not evaluated, just vision checked
 👁 picture remarks: Light scratches on the cartridge label; seller's own photos; looks genuine
 ```
 
-If the photos reviewer fails, the item is still sent, with `👁 picture remarks
-unavailable: <why>`. With `AI_FILTER_VISION_MODEL=off` the vision instructions
+The remarks only report what is visible: the photos reviewer is told not to
+speculate about wear or damage it cannot see. If it fails, the item is still
+sent, with `👁 picture remarks unavailable: <why>`. With `AI_FILTER_VISION_MODEL=off` the vision instructions
 are not used at all.
 
 A sent message ends with:
 
 ```
+👤 Seller: rating 4.9/5 from 37 reviews
 🤖 AI: fits
 👁 yes: Genuine Bedale, zip intact
 📝 yes: Size L, "barely worn", no defects
 ```
 
+The `👤 Seller` line is on every message, AI filter or not (see
+[Seller's rating](#sellers-rating)).
+
 When the item page could not be read it adds `ℹ️ listing page unavailable:
 checked on search-result data only`.
+
+### Seller's rating
+
+Every sent message, from any query, gets a line with the seller's rating
+from the item page: `👤 Seller: rating 5.0/5 from 14 reviews`, `no reviews
+yet`, `..., business seller`, or `rating unavailable` when the page could not
+be read. Search results carry no rating, so an item that had no AI check (or
+one with `AI_FILTER_FETCH_DETAILS=false`) costs one item-page request before
+it is sent; an AI-checked item reuses the page the check already read.
+Rejected items are never fetched for this. `NOTIFY_SELLER_RATING=false` turns
+the line, and those requests, off.
 
 ### Connections and retries
 
@@ -180,6 +199,7 @@ for r in sqlite3.connect('data/vinted_notifications.db').execute('''
 | `AI_FILTER_TIMEOUT` | `60` | Seconds to wait for a model's answer; a timeout is retried once. Normal answers take 3–15 s. |
 | `AI_FILTER_MAX_TOKENS` | `2000` | Output budget per call; reasoning models need room. Output tokens don't count against the weekly allowance. |
 | `AI_FILTER_IMAGE_MAX_PX` | `768` | Photos are downscaled and sent as JPEG; smaller = fewer input tokens. |
+| `NOTIFY_SELLER_RATING` | `true` | Seller's rating on every message; works without the AI filter too. See [Seller's rating](#sellers-rating). |
 
 The key lives only in the container environment, never in the SQLite database
 or the web UI.

@@ -32,6 +32,7 @@ services:
       # - AI_FILTER_TIMEOUT=60                            # seconds to wait for a model's answer (retried once)
       # - AI_FILTER_MAX_TOKENS=2000                       # output budget per call
       # - AI_FILTER_IMAGE_MAX_PX=768                      # longest photo side sent to the model
+      # - NOTIFY_SELLER_RATING=true                       # seller's rating in every message (reads the item page)
     ports:
       - 8200:8000        # Web UI (change the host port to taste)
       # - 8280:8080      # RSS feed (optional; uncomment if you use RSS)
