@@ -17,6 +17,14 @@ logger = get_logger(__name__)
 MAX_NOTIFICATIONS_PER_RUN = 10
 
 
+def notify_seller_rating():
+    """NOTIFY_SELLER_RATING (default true): add the seller's rating to every
+    message. It comes from the item page, so an item the AI check did not
+    already read costs one extra Vinted request."""
+    value = (os.environ.get("NOTIFY_SELLER_RATING") or "").strip().lower()
+    return value not in ("0", "false", "no", "off")
+
+
 def process_query(query, name=None, ai_intent=None, ai_vision_intent=None):
     """
     Process a Vinted query URL by:
@@ -403,10 +411,14 @@ def clear_item_queue(items_queue, new_items_queue):
             ai_vision_intent = db.get_query_ai_vision_intent(query_id)
             ai_mode = ai_filter.check_mode(ai_intent, ai_vision_intent)
 
+        seller_rating = notify_seller_rating()
+
         for item in to_notify:
             ai_note = None
+            listing = None
             if ai_mode:
                 evaluation = ai_filter.evaluate_item(item, ai_intent, ai_vision_intent)
+                listing = evaluation.listing
                 db.save_ai_verdict(item.id, query_id, ai_intent, evaluation.to_row())
                 logger.info(
                     f"AI filter [query {query_id}] {evaluation.summary()}"
@@ -415,6 +427,13 @@ def clear_item_queue(items_queue, new_items_queue):
                 if not evaluation.notify:
                     continue
                 ai_note = ai_filter.format_note(evaluation)
+
+            # Seller's rating: only on the item page, so read it unless the AI check already did
+            seller_note = None
+            if seller_rating:
+                if listing is None or not listing.fetched:
+                    listing = ai_filter.fetch_details(ai_filter.listing_from_item(item))
+                seller_note = ai_filter.seller_line(listing)
 
             # We create the message
             message_template = db.get_parameter("message_template")
@@ -426,8 +445,9 @@ def clear_item_queue(items_queue, new_items_queue):
                 brand=html.escape(str(item.brand_title or "")),
                 image=None if item.photo is None else html.escape(item.photo),
             )
-            if ai_note:
-                content = content.rstrip("\n") + "\n" + ai_note
+            extra = [note for note in (seller_note, ai_note) if note]
+            if extra:
+                content = content.rstrip("\n") + "\n" + "\n".join(extra)
             # add the item to the queue
             new_items_queue.put((content, item.url, "Open Vinted", None, None))
             # new_items_queue.put((content, item.url, "Open Vinted", item.buy_url, "Open buy page"))
