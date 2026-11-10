@@ -296,8 +296,6 @@ if __name__ == "__main__":
     # AI filter column (fork addition, idempotent)
     if db.ensure_ai_schema():
         logger.info("Added AI filter columns to the database")
-    if db.ensure_indexes():
-        logger.info("Added an index on items to the database")
 
     # Plugin checker
     plugin_checker()
