@@ -1,6 +1,6 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, MessageHandler, filters
-from telegram.error import RetryAfter
+from telegram.error import BadRequest, NetworkError, RetryAfter
 import db
 import core
 import asyncio
@@ -8,6 +8,16 @@ from logger import get_logger
 
 # Get logger for this module
 logger = get_logger(__name__)
+
+# The jobs are scheduled before run_polling() starts the job queue, and
+# APScheduler skips a job that starts more than 1 s late (its default
+# misfire_grace_time). A slow first contact with Telegram was enough to skip
+# the queue reader for good: the bot kept answering commands, but every
+# notification stayed in the queue. None = run however late.
+RUN_EVEN_IF_LATE = {"misfire_grace_time": None}
+
+# Attempts per message for network errors and Telegram flood control
+SEND_ATTEMPTS = 4
 
 
 async def hello(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -52,15 +62,17 @@ async def ignore_unauthorized(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 class LeRobot:
     def __init__(self, queue):
-        from telegram import Bot
         from telegram.ext import ApplicationBuilder, CommandHandler
 
         try:
 
-            self.bot = Bot(db.get_parameter("telegram_token"))
             self.app = (
                 ApplicationBuilder().token(db.get_parameter("telegram_token")).build()
             )
+            # The application's own bot: run_polling() opens its connection once
+            # and keeps it, so a message is one request and one send cannot
+            # close the connection under another
+            self.bot = self.app.bot
 
             # Create the item queue to send to telegram
             self.new_items_queue = queue
@@ -96,11 +108,12 @@ class LeRobot:
 
             job_queue = self.app.job_queue
             # Set the commands
-            job_queue.run_once(self.set_commands, when=1)
+            job_queue.run_once(self.set_commands, when=1, job_kwargs=RUN_EVEN_IF_LATE)
             # Every day we check for a new version
-            job_queue.run_repeating(self.check_version, interval=86400, first=1)
-            # Every second we check for new posts to send to telegram
-            job_queue.run_once(self.check_telegram_queue, when=1)
+            job_queue.run_repeating(self.check_version, interval=86400, first=1,
+                                    job_kwargs=RUN_EVEN_IF_LATE)
+            # Send the notifications from the queue (runs for the life of the bot)
+            job_queue.run_once(self.check_telegram_queue, when=1, job_kwargs=RUN_EVEN_IF_LATE)
 
             self.app.run_polling()
         except Exception as e:
@@ -286,8 +299,14 @@ class LeRobot:
     ### TELEGRAM SPECIFIC FUNCTIONS ###
 
     async def send_new_post(self, content, url, text, buy_url=None, buy_text=None):
-        try:
-            async with self.bot:
+        """Send one message. Returns True once Telegram accepted it.
+
+        Network errors and timeouts are retried (a timed-out message may have
+        arrived after all, so it can come twice); a rejected message is not."""
+        first_line = (content or "").strip().split("\n", 1)[0][:80]
+        for attempt in range(1, SEND_ATTEMPTS + 1):
+            last = attempt == SEND_ATTEMPTS
+            try:
                 chat_ID = str(db.get_parameter("telegram_chat_id"))
                 buttons = [[InlineKeyboardButton(text=text, url=url)]]
                 if buy_url and buy_text:
@@ -300,16 +319,31 @@ class LeRobot:
                     write_timeout=40,
                     reply_markup=InlineKeyboardMarkup(buttons),
                 )
-        except RetryAfter as e:
-            retry_after = e.retry_after
-            logger.error(
-                f"Flood control exceeded. Retrying in {retry_after + 2} seconds"
-            )
-            await asyncio.sleep(retry_after + 2)
-            # Retry sending the message
-            await self.send_new_post(content, url, text, buy_url, buy_text)
-        except Exception as e:
-            logger.error(f"Error sending new post: {str(e)}", exc_info=True)
+                logger.info(f"Telegram: sent {first_line} | {url}")
+                return True
+            except RetryAfter as e:
+                if last:
+                    logger.error(f"Telegram: not sent, flood control: {first_line} | {url}")
+                    return False
+                retry_after = e.retry_after  # seconds, or a timedelta in newer versions
+                if hasattr(retry_after, "total_seconds"):
+                    retry_after = retry_after.total_seconds()
+                wait = float(retry_after) + 2
+                logger.warning(f"Telegram flood control: retrying in {wait:.0f} s")
+                await asyncio.sleep(wait)
+            except BadRequest as e:  # a NetworkError subclass, but retrying won't help
+                logger.error(f"Telegram rejected the message: {e} | {first_line} | {url}")
+                return False
+            except NetworkError as e:  # includes TimedOut
+                if last:
+                    logger.error(f"Telegram: not sent after {attempt} attempts ({e}): {first_line} | {url}")
+                    return False
+                logger.warning(f"Telegram: {e.__class__.__name__}: {e}, retrying ({attempt}/{SEND_ATTEMPTS - 1})")
+                await asyncio.sleep(5 * attempt)
+            except Exception as e:
+                logger.error(f"Error sending new post: {str(e)} | {first_line} | {url}", exc_info=True)
+                return False
+        return False
 
     async def check_version(self, context: ContextTypes.DEFAULT_TYPE):
         try:
@@ -326,16 +360,18 @@ class LeRobot:
             logger.error(f"Error checking for new version: {str(e)}", exc_info=True)
 
     async def check_telegram_queue(self, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            while 1:
+        logger.info("Telegram: sending notifications from the queue")
+        while True:
+            # One bad entry must not stop every later notification
+            try:
                 if not self.new_items_queue.empty():
                     content, url, text, buy_url, buy_text = self.new_items_queue.get()
                     await self.send_new_post(content, url, text, buy_url, buy_text)
                 else:
                     await asyncio.sleep(0.1)
-                    pass
-        except Exception as e:
-            logger.error(f"Error checking telegram queue: {str(e)}", exc_info=True)
+            except Exception as e:
+                logger.error(f"Error checking telegram queue: {str(e)}", exc_info=True)
+                await asyncio.sleep(1)
 
     async def set_commands(self, context: ContextTypes.DEFAULT_TYPE):
         try:
