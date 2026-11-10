@@ -26,7 +26,14 @@ from web_ui_plugin.web_ui import web_ui_process
 telegram_process = None
 rss_process = None
 scrape_process = None
+item_extractor_process = None
+dispatcher_process = None
 current_query_refresh_delay = None
+
+# Pause after an unexpected error in a worker loop, so a fault that repeats on
+# every pass (a broken message template, a Vinted API change) fills the log at
+# a readable pace instead of spinning on it.
+WORKER_ERROR_BACKOFF_SECONDS = 2
 
 
 def scraper_process(items_queue):
@@ -58,27 +65,44 @@ def item_extractor(items_queue, new_items_queue):
     logger.info("Item extractor process started")
     try:
         while True:
-            # Check if there's an item in the queue
-            core.clear_item_queue(items_queue, new_items_queue)
+            try:
+                # Check if there's an item in the queue
+                core.clear_item_queue(items_queue, new_items_queue)
+            except Exception:
+                # One bad batch must not end the loop: the scraper would carry on
+                # logging "Scraped N items" while nothing is processed or notified.
+                # Logging here puts the traceback in logs/vinted.log (the web UI's
+                # log page); left uncaught it only reaches the container's stderr.
+                # The batch was already taken off the queue, so it is dropped.
+                logger.error(
+                    "Error while processing a batch of scraped items; skipping it",
+                    exc_info=True,
+                )
+                time.sleep(WORKER_ERROR_BACKOFF_SECONDS)
             time.sleep(0.1)  # Small sleep to prevent high CPU usage
     except (KeyboardInterrupt, SystemExit):
-        logger.info("Consumer process stopped")
+        logger.info("Item extractor process stopped")
 
 
 def dispatcher_function(input_queue, rss_queue, telegram_queue):
     logger.info("Dispatcher process started")
     try:
         while True:
-            # Get from input queue
-            item = input_queue.get()
-            # Send to RSS queue
-            rss_queue.put(item)
-            #
-            telegram_queue.put(item)
+            try:
+                # Get from input queue
+                item = input_queue.get()
+                # Send to RSS queue
+                rss_queue.put(item)
+                # Send to Telegram queue
+                telegram_queue.put(item)
+            except Exception:
+                # Skip this item and keep dispatching the next ones
+                logger.error(
+                    "Error while dispatching a new item; skipping it", exc_info=True
+                )
+                time.sleep(WORKER_ERROR_BACKOFF_SECONDS)
     except (KeyboardInterrupt, SystemExit):
         logger.info("Dispatcher process stopped")
-    except Exception as e:
-        logger.error(f"Error in dispatcher process: {e}", exc_info=True)
 
 
 def telegram_bot_process(queue):
@@ -134,8 +158,50 @@ def check_refresh_delay(items_queue):
         logger.error(f"Error updating refresh delay: {e}", exc_info=True)
 
 
-def monitor_processes(items_queue, telegram_queue, rss_queue):
+def restart_if_exited(name, process, target, args):
+    """
+    Return `process`, or a freshly started replacement if it has exited.
+
+    The scraper, item extractor and dispatcher must run for the whole life of
+    the app. When one of them is gone the web UI still answers and nothing looks
+    wrong, but no item is scraped or notified any more.
+    """
+    if process is None or process.is_alive():
+        return process
+    logger.error(
+        f"{name} process exited unexpectedly (exit code {process.exitcode}); restarting it"
+    )
+    process.join()
+    replacement = multiprocessing.Process(target=target, args=args)
+    replacement.start()
+    return replacement
+
+
+def restart_core_processes(items_queue, new_items_queue, telegram_queue, rss_queue):
+    global scrape_process, item_extractor_process, dispatcher_process
+
+    scrape_process = restart_if_exited(
+        "Scrape", scrape_process, scraper_process, (items_queue,)
+    )
+    item_extractor_process = restart_if_exited(
+        "Item extractor",
+        item_extractor_process,
+        item_extractor,
+        (items_queue, new_items_queue),
+    )
+    dispatcher_process = restart_if_exited(
+        "Dispatcher",
+        dispatcher_process,
+        dispatcher_function,
+        (new_items_queue, rss_queue, telegram_queue),
+    )
+
+
+def monitor_processes(items_queue, new_items_queue, telegram_queue, rss_queue):
     global telegram_process, rss_process
+
+    # Restart the scraper, item extractor or dispatcher if one has died
+    restart_core_processes(items_queue, new_items_queue, telegram_queue, rss_queue)
 
     # Check if the query refresh delay has changed
     check_refresh_delay(items_queue)
@@ -256,13 +322,14 @@ if __name__ == "__main__":
     dispatcher_process.start()
 
     # 4. Set up a scheduler to monitor processes
-    # This will check the process status in the database and start/stop processes as needed
+    # This will check the process status in the database and start/stop processes as needed,
+    # and restart the scrape, item extractor and dispatcher processes if one has died
     monitor_scheduler = BackgroundScheduler()
     monitor_scheduler.add_job(
         monitor_processes,
         "interval",
         seconds=5,
-        args=[items_queue, telegram_queue, rss_queue],
+        args=[items_queue, new_items_queue, telegram_queue, rss_queue],
         name="process_monitor",
     )
     monitor_scheduler.start()
