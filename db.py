@@ -347,6 +347,32 @@ def ensure_ai_schema():
             conn.close()
 
 
+def ensure_indexes():
+    """Create the indexes the scraping loop needs. Safe to run every start.
+
+    items(item): is_item_in_db_by_id() runs for every scraped item of every
+    query on each refresh. Without an index each call reads the whole items
+    table, which only grows, and keeps the database busy for the other
+    processes. Returns True if an index was added.
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_items_item'"
+        ).fetchone()
+        if not exists:
+            conn.execute("CREATE INDEX idx_items_item ON items (item)")
+            conn.commit()
+        return not exists
+    except Exception:
+        _log_db_error()
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+
 def save_ai_verdict(item_id, query_id, intent, row):
     """Store one verdict. `row` comes from ai_filter.Evaluation.to_row()."""
     import time as _time

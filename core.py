@@ -343,6 +343,13 @@ def clear_item_queue(items_queue, new_items_queue):
                 f"without notifying, so the existing catalogue is not replayed."
             )
 
+        def mark_seen(item):
+            # The watermark only filters items that carry a real listing time. For
+            # the rest it only has to be set once, as the "first run" flag above,
+            # so a skipped item costs no database write after that.
+            if item.has_real_timestamp or last_query_timestamp is None:
+                db.update_last_timestamp(query_id, item.raw_timestamp)
+
         to_notify = []
         for item in reversed(data):
 
@@ -357,20 +364,19 @@ def clear_item_queue(items_queue, new_items_queue):
                 continue
             # In case of multiple queries, we need to check if the item is already in the db
             if db.is_item_in_db_by_id(item.id) is True:
-                # We update the timestamp
-                db.update_last_timestamp(query_id, item.raw_timestamp)
+                mark_seen(item)
                 continue
             # If there's an allowlist and
-            # If the user's country is not in the allowlist, we just update the timestamp
+            # If the user's country is not in the allowlist, we just skip the item
             if db.get_allowlist() != 0 and (
                 get_user_country(item.raw_data["user"]["id"])
             ) not in (db.get_allowlist() + ["XX"]):
-                db.update_last_timestamp(query_id, item.raw_timestamp)
+                mark_seen(item)
                 continue
             # Check if the item title contains any banwords
             if banwords_str and contains_banwords(item.title, banwords_str):
-                # If it contains banwords, just update the timestamp and skip
-                db.update_last_timestamp(query_id, item.raw_timestamp)
+                # If it contains banwords, just skip it
+                mark_seen(item)
                 continue
 
             # Being recorded is what stops an item coming back next run, so every
