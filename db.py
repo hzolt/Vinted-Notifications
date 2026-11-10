@@ -1,11 +1,32 @@
 import sqlite3
-from traceback import print_exc
+import sys
+
+from logger import get_logger
+
+logger = get_logger(__name__)
 
 DB_PATH = "./data/vinted_notifications.db"
 
+# How long a connection waits for another process to finish with the database
+# before giving up with "database is locked". The scraper, item extractor, web
+# UI and plugins all use the file at once, and SQLite's default of 5 seconds is
+# not always enough on a slow or busy disk.
+DB_TIMEOUT_SECONDS = 30
+
+
+def _log_db_error():
+    """Log the exception being handled, with its traceback, to logs/vinted.log.
+
+    Most functions here return None or an empty value when the database fails,
+    which the caller cannot tell apart from a missing value, so this is where
+    the real cause shows up (it used to be printed to stderr only).
+    """
+    caller = sys._getframe(1).f_code.co_name
+    logger.error(f"Database error in {caller}(): {sys.exc_info()[1]}", exc_info=True)
+
 
 def get_db_connection():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS)
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
@@ -22,7 +43,7 @@ def create_or_update_sqlite_db(db_path):
 
         conn.commit()
     except Exception:
-        print_exc()
+        _log_db_error()
     finally:
         if conn:
             conn.close()
@@ -31,14 +52,14 @@ def create_or_update_sqlite_db(db_path):
 def is_item_in_db_by_id(id):
     conn = None
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS)
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT() FROM items WHERE item=?", (id,))
         if cursor.fetchone()[0]:
             return True
         return False
     except Exception:
-        print_exc()
+        _log_db_error()
     finally:
         if conn:
             conn.close()
@@ -47,7 +68,7 @@ def is_item_in_db_by_id(id):
 def get_last_timestamp(query_id):
     conn = None
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS)
         cursor = conn.cursor()
         cursor.execute("SELECT last_item FROM queries WHERE id=?", (query_id,))
         result = cursor.fetchone()
@@ -55,7 +76,7 @@ def get_last_timestamp(query_id):
             return result[0]
         return None
     except Exception:
-        print_exc()
+        _log_db_error()
         return None
     finally:
         if conn:
@@ -65,14 +86,14 @@ def get_last_timestamp(query_id):
 def update_last_timestamp(query_id, timestamp):
     conn = None
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS)
         cursor = conn.cursor()
         cursor.execute(
             "UPDATE queries SET last_item=? WHERE id=?", (timestamp, query_id)
         )
         conn.commit()
     except Exception:
-        print_exc()
+        _log_db_error()
     finally:
         if conn:
             conn.close()
@@ -94,7 +115,7 @@ def add_item_to_db(id, title, query_id, price, timestamp, photo_url, currency="E
         )
         conn.commit()
     except Exception:
-        print_exc()
+        _log_db_error()
     finally:
         if conn:
             conn.close()
@@ -103,12 +124,12 @@ def add_item_to_db(id, title, query_id, price, timestamp, photo_url, currency="E
 def get_queries():
     conn = None
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS)
         cursor = conn.cursor()
         cursor.execute("SELECT id, query, last_item, query_name FROM queries")
         return cursor.fetchall()
     except Exception:
-        print_exc()
+        _log_db_error()
     finally:
         if conn:
             conn.close()
@@ -117,7 +138,7 @@ def get_queries():
 def is_query_in_db(processed_query):
     conn = None
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS)
         cursor = conn.cursor()
         # replace spaces in searched_text by % to match any query containing the searched text
 
@@ -128,7 +149,7 @@ def is_query_in_db(processed_query):
             return True
         return False
     except Exception:
-        print_exc()
+        _log_db_error()
         return False
     finally:
         if conn:
@@ -138,7 +159,7 @@ def is_query_in_db(processed_query):
 def add_query_to_db(query, name=None, ai_intent=None, ai_vision_intent=None):
     conn = None
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS)
         cursor = conn.cursor()
         if name:
             cursor.execute(
@@ -162,7 +183,7 @@ def add_query_to_db(query, name=None, ai_intent=None, ai_vision_intent=None):
             )
         conn.commit()
     except Exception:
-        print_exc()
+        _log_db_error()
     finally:
         if conn:
             conn.close()
@@ -171,7 +192,7 @@ def add_query_to_db(query, name=None, ai_intent=None, ai_vision_intent=None):
 def get_query_id_by_rowid(rowid):
     conn = None
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS)
         cursor = conn.cursor()
         query = f"SELECT id FROM (SELECT id, ROW_NUMBER() OVER (ORDER BY ROWID) rn FROM queries) t WHERE rn={rowid}"
         cursor.execute(query)
@@ -180,7 +201,7 @@ def get_query_id_by_rowid(rowid):
             return result[0]
         return None
     except Exception:
-        print_exc()
+        _log_db_error()
         return None
     finally:
         if conn:
@@ -190,7 +211,7 @@ def get_query_id_by_rowid(rowid):
 def remove_query_from_db(query_number):
     conn = None
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS)
         cursor = conn.cursor()
         # Delete items associated with this query using query_id
         cursor.execute("DELETE FROM items WHERE query_id=?", (query_number,))
@@ -198,7 +219,7 @@ def remove_query_from_db(query_number):
         cursor.execute("DELETE FROM queries WHERE id=?", (query_number,))
         conn.commit()
     except Exception:
-        print_exc()
+        _log_db_error()
     finally:
         if conn:
             conn.close()
@@ -207,7 +228,7 @@ def remove_query_from_db(query_number):
 def remove_all_queries_from_db():
     conn = None
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS)
         cursor = conn.cursor()
         # Delete all items first to maintain foreign key integrity
         cursor.execute("DELETE FROM items")
@@ -215,7 +236,7 @@ def remove_all_queries_from_db():
         cursor.execute("DELETE FROM queries")
         conn.commit()
     except Exception:
-        print_exc()
+        _log_db_error()
     finally:
         if conn:
             conn.close()
@@ -235,7 +256,7 @@ def update_query_in_db(query_id, query, name):
     """
     conn = None
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS)
         cursor = conn.cursor()
         cursor.execute(
             "UPDATE queries SET query=?, query_name=? WHERE id=?",
@@ -244,7 +265,7 @@ def update_query_in_db(query_id, query, name):
         conn.commit()
         return True
     except Exception:
-        print_exc()
+        _log_db_error()
         return False
     finally:
         if conn:
@@ -319,7 +340,7 @@ def ensure_ai_schema():
         conn.commit()
         return added
     except Exception:
-        print_exc()
+        _log_db_error()
         return False
     finally:
         if conn:
@@ -334,7 +355,7 @@ def save_ai_verdict(item_id, query_id, intent, row):
               "checked_at": int(_time.time()), "intent": intent, **row}
     conn = None
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS)
         conn.execute(
             f"INSERT OR REPLACE INTO ai_verdicts ({', '.join(AI_VERDICT_COLUMNS)}) "
             f"VALUES ({', '.join('?' * len(AI_VERDICT_COLUMNS))})",
@@ -342,7 +363,7 @@ def save_ai_verdict(item_id, query_id, intent, row):
         )
         conn.commit()
     except Exception:
-        print_exc()
+        _log_db_error()
     finally:
         if conn:
             conn.close()
@@ -354,7 +375,7 @@ def get_ai_verdicts(item_ids):
         return {}
     conn = None
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS)
         conn.row_factory = sqlite3.Row
         placeholders = ",".join("?" * len(item_ids))
         rows = conn.execute(
@@ -363,7 +384,7 @@ def get_ai_verdicts(item_ids):
         ).fetchall()
         return {row["item_id"]: dict(row) for row in rows}
     except Exception:
-        print_exc()
+        _log_db_error()
         return {}
     finally:
         if conn:
@@ -373,13 +394,13 @@ def get_ai_verdicts(item_ids):
 def get_query_ai_intent(query_id):
     conn = None
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS)
         row = conn.execute(
             "SELECT ai_intent FROM queries WHERE id=?", (query_id,)
         ).fetchone()
         return row[0].strip() if row and row[0] and row[0].strip() else None
     except Exception:
-        print_exc()
+        _log_db_error()
         return None
     finally:
         if conn:
@@ -417,13 +438,13 @@ def _get_query_texts(column):
     assert column in _AI_QUERY_COLUMNS
     conn = None
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS)
         rows = conn.execute(
             f"SELECT id, {column} FROM queries WHERE {column} IS NOT NULL AND TRIM({column}) != ''"
         ).fetchall()
         return {row[0]: row[1].strip() for row in rows}
     except Exception:
-        print_exc()
+        _log_db_error()
         return {}
     finally:
         if conn:
@@ -435,13 +456,13 @@ def _set_query_text(query_id, column, text):
     assert column in _AI_QUERY_COLUMNS
     conn = None
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS)
         value = text.strip() if text and text.strip() else None
         conn.execute(f"UPDATE queries SET {column}=? WHERE id=?", (value, query_id))
         conn.commit()
         return True
     except Exception:
-        print_exc()
+        _log_db_error()
         return False
     finally:
         if conn:
@@ -451,12 +472,12 @@ def _set_query_text(query_id, column, text):
 def add_to_allowlist(country):
     conn = None
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS)
         cursor = conn.cursor()
         cursor.execute("INSERT INTO allowlist VALUES (?)", (country,))
         conn.commit()
     except Exception:
-        print_exc()
+        _log_db_error()
     finally:
         if conn:
             conn.close()
@@ -465,12 +486,12 @@ def add_to_allowlist(country):
 def remove_from_allowlist(country):
     conn = None
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS)
         cursor = conn.cursor()
         cursor.execute("DELETE FROM allowlist WHERE country=?", (country,))
         conn.commit()
     except Exception:
-        print_exc()
+        _log_db_error()
     finally:
         if conn:
             conn.close()
@@ -479,7 +500,7 @@ def remove_from_allowlist(country):
 def get_allowlist():
     conn = None
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS)
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM allowlist")
         # Get list of countries
@@ -496,12 +517,12 @@ def get_allowlist():
 def clear_allowlist():
     conn = None
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS)
         cursor = conn.cursor()
         cursor.execute("DELETE FROM allowlist")
         conn.commit()
     except Exception:
-        print_exc()
+        _log_db_error()
     finally:
         if conn:
             conn.close()
@@ -510,13 +531,13 @@ def clear_allowlist():
 def get_parameter(key):
     conn = None
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS)
         cursor = conn.cursor()
         cursor.execute("SELECT value FROM parameters WHERE key=?", (key,))
         result = cursor.fetchone()
         return result[0] if result else None
     except Exception:
-        print_exc()
+        _log_db_error()
     finally:
         if conn:
             conn.close()
@@ -525,12 +546,12 @@ def get_parameter(key):
 def set_parameter(key, value):
     conn = None
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS)
         cursor = conn.cursor()
         cursor.execute("UPDATE parameters SET value=? WHERE key=?", (value, key))
         conn.commit()
     except Exception:
-        print_exc()
+        _log_db_error()
     finally:
         if conn:
             conn.close()
@@ -539,12 +560,12 @@ def set_parameter(key, value):
 def get_all_parameters():
     conn = None
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS)
         cursor = conn.cursor()
         cursor.execute("SELECT key, value FROM parameters")
         return {row[0]: row[1] for row in cursor.fetchall()}
     except Exception:
-        print_exc()
+        _log_db_error()
         return {}
     finally:
         if conn:
@@ -554,7 +575,7 @@ def get_all_parameters():
 def get_items(limit=50, query=None):
     conn = None
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS)
         cursor = conn.cursor()
         if query:
             # Get the query_id for the given query
@@ -577,7 +598,7 @@ def get_items(limit=50, query=None):
             )
         return cursor.fetchall()
     except Exception:
-        print_exc()
+        _log_db_error()
         return []
     finally:
         if conn:
@@ -587,12 +608,12 @@ def get_items(limit=50, query=None):
 def get_total_items_count():
     conn = None
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS)
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM items")
         return cursor.fetchone()[0]
     except Exception:
-        print_exc()
+        _log_db_error()
         return 0
     finally:
         if conn:
@@ -602,12 +623,12 @@ def get_total_items_count():
 def get_total_queries_count():
     conn = None
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS)
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM queries")
         return cursor.fetchone()[0]
     except Exception:
-        print_exc()
+        _log_db_error()
         return 0
     finally:
         if conn:
@@ -617,14 +638,14 @@ def get_total_queries_count():
 def get_last_found_item():
     conn = None
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS)
         cursor = conn.cursor()
         cursor.execute(
             "SELECT i.item, i.title, i.price, i.currency, i.timestamp, q.query, i.photo_url FROM items i JOIN queries q ON i.query_id = q.id ORDER BY i.timestamp DESC LIMIT 1"
         )
         return cursor.fetchone()
     except Exception:
-        print_exc()
+        _log_db_error()
         return None
     finally:
         if conn:
@@ -634,7 +655,7 @@ def get_last_found_item():
 def get_items_per_day():
     conn = None
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS)
         cursor = conn.cursor()
 
         # Get total items
@@ -661,7 +682,7 @@ def get_items_per_day():
         # Calculate items per day
         return round(total_items / days_diff, 1)
     except Exception:
-        print_exc()
+        _log_db_error()
         return 0
     finally:
         if conn:

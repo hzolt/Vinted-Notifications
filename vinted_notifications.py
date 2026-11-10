@@ -132,7 +132,12 @@ def check_refresh_delay(items_queue):
 
     # Get the current value from the database
     try:
-        new_delay = int(db.get_parameter("query_refresh_delay"))
+        value = db.get_parameter("query_refresh_delay")
+        if value is None:
+            # The read failed (db.py has logged why): keep the current delay
+            # and look again on the next pass.
+            return
+        new_delay = int(value)
 
         # If the delay has changed, update the scheduler
         if new_delay != current_query_refresh_delay:
@@ -207,14 +212,19 @@ def monitor_processes(items_queue, new_items_queue, telegram_queue, rss_queue):
     check_refresh_delay(items_queue)
 
     ### TELEGRAM ###
+    telegram_is_running = telegram_process is not None and telegram_process.is_alive()
     # Check telegram process status
-    telegram_should_run = db.get_parameter("telegram_process_running") == "True"
+    telegram_flag = db.get_parameter("telegram_process_running")
+    telegram_should_run = telegram_flag == "True"
     # Check if the telegram token and chat ID are set
     telegram_token = db.get_parameter("telegram_token")
     telegram_chat_id = db.get_parameter("telegram_chat_id")
     if not telegram_token or not telegram_chat_id:
         telegram_should_run = False
-    telegram_is_running = telegram_process is not None and telegram_process.is_alive()
+    if None in (telegram_flag, telegram_token, telegram_chat_id):
+        # A read failed (db.py has logged why). That says nothing about whether
+        # the bot should run, so leave it as it is until the next pass.
+        telegram_should_run = telegram_is_running
 
     if telegram_should_run and not telegram_is_running:
         # Start telegram process
@@ -232,8 +242,10 @@ def monitor_processes(items_queue, new_items_queue, telegram_queue, rss_queue):
 
     ### RSS ###
     # Check RSS process status
-    rss_should_run = db.get_parameter("rss_process_running") == "True"
     rss_is_running = rss_process is not None and rss_process.is_alive()
+    rss_flag = db.get_parameter("rss_process_running")
+    # None: the read failed (db.py has logged why), so leave RSS as it is
+    rss_should_run = rss_is_running if rss_flag is None else rss_flag == "True"
 
     if rss_should_run and not rss_is_running:
         # Start RSS process
