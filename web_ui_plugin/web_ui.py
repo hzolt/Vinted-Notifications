@@ -89,6 +89,7 @@ def index():
 
     # Get recent items
     items = db.get_items(limit=10)
+    ai_verdicts = db.get_ai_verdicts([item[0] for item in items])
     formatted_items = []
     for item in items:
         formatted_items.append(
@@ -102,6 +103,7 @@ def index():
                 "query": item[5],
                 "photo_url": item[6],
                 "url": f"{urlparse(item[5]).scheme}://{urlparse(item[5]).netloc}/items/{item[0]}",
+                "ai": ai_verdicts.get(item[0]),
             }
         )
 

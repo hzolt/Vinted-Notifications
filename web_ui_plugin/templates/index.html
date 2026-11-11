@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import ai_badge %}
 
 {% block title %}Dashboard - Vinted Notifications{% endblock %}
 
@@ -193,6 +194,7 @@
                                     Price: {{ item.price }} {{ item.currency }}<br>
                                     Date: {{ item.timestamp }}
                                 </p>
+                                {% if item.ai %}<div class="mt-2">{{ ai_badge(item) }}</div>{% endif %}
                             </div>
                             <div class="card-footer bg-white p-2">
                                 <a href="{{ item.url }}" target="_blank"
@@ -235,7 +237,7 @@
                                 </div>
                                 {% endif %}
                             </td>
-                            <td>{{ item.title }}</td>
+                            <td>{{ item.title }}{% if item.ai %}<div class="mt-1">{{ ai_badge(item) }}</div>{% endif %}</td>
                             <td>{{ item.price }} {{ item.currency }}</td>
                             <td>{{ item.timestamp }}</td>
                             <td>
