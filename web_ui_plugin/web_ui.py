@@ -143,6 +143,7 @@ def index():
         telegram_running=telegram_running,
         rss_running=rss_running,
         stats=stats,
+        ai_status=ai_filter.status(),
     )
 
 

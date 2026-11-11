@@ -18,3 +18,10 @@
 </div>
 {%- endif -%}
 {%- endmacro %}
+
+{# AI filter on/off line (ai_status: ai_filter.status()) #}
+{% macro ai_status_bar(ai_status, classes='') -%}
+<div class="alert {{ 'alert-info' if ai_status.enabled else 'alert-secondary' }} py-2 {{ classes }}" role="status">
+    <i class="bi bi-robot me-2"></i>{{ ai_status.text }}
+</div>
+{%- endmacro %}
