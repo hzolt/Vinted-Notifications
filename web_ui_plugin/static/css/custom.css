@@ -314,3 +314,8 @@ main {
         font-size: 1.1rem;
     }
 }
+
+/* Dashboard KPI tile colour for "Items per Last Hour" (the header's purple) */
+.kpi-purple {
+    color: var(--purple-color);
+}

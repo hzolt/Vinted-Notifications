@@ -116,6 +116,7 @@ def index():
         "total_items": db.get_total_items_count(),
         "total_queries": db.get_total_queries_count(),
         "items_per_day": db.get_items_per_day(),
+        "items_last_hour": db.get_items_last_hour(),
     }
 
     # Get the last found item
