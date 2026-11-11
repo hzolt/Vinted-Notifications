@@ -26,7 +26,7 @@ services:
       # - AI_FILTER_BASE_URL=https://api.nano-gpt.com/api/subscription/v1
       # - AI_FILTER_MAX_PHOTOS=4                          # photos sent to the vision model
       # - AI_FILTER_FETCH_DETAILS=true                    # fetch description/all photos per item
-      # - AI_FILTER_COMBINE=veto                          # veto | strict
+      # - AI_FILTER_COMBINE=maybe                         # maybe | veto | strict
       # - AI_FILTER_NOTIFY_MAYBE=true                     # notify when the outcome is "maybe"
       # - AI_FILTER_FAIL_OPEN=true                        # notify when no reviewer could answer
       # - AI_FILTER_TIMEOUT=60                            # seconds to wait for a model's answer (retried once)

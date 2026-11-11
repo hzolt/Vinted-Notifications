@@ -77,16 +77,36 @@ Drive" platform. When such a field disagrees with the title or description,
 the title and description win, and a field that may just be the nearest option
 is not on its own a reason for `no`.
 
+`AI_FILTER_COMBINE` sets how the two answers become the final decision:
+
+| Photos | Text | `maybe` (default) | `veto` | `strict` |
+|---|---|---|---|---|
+| no | no | `no`, not sent | `no`, not sent | `no`, not sent |
+| yes | yes | `yes`, sent | `yes`, sent | `yes`, sent |
+| maybe | maybe | `maybe`, sent ❔ | `maybe`, sent ❔ | `maybe`, sent ❔ |
+| no | yes | `maybe`, sent ❔ | `no`, not sent | `no`, not sent |
+| no | maybe | `maybe`, sent ❔ | `no`, not sent | `no`, not sent |
+| yes | no | `maybe`, sent ❔ | `no`, not sent | `no`, not sent |
+| yes | maybe | `yes`, sent | `yes`, sent | `maybe`, sent ❔ |
+| maybe | no | `maybe`, sent ❔ | `no`, not sent | `no`, not sent |
+| maybe | yes | `yes`, sent | `yes`, sent | `maybe`, sent ❔ |
+
+* `maybe`: only `no` from both reviewers rejects. A `no` against a `yes` or
+  `maybe` means the reviewers disagree: the item is sent as `maybe` and the
+  message says `🤖❔ AI: maybe, reviewers disagree`.
+* `veto`: any `no` rejects.
+* `strict`: any `no` rejects, and `yes` needs a `yes` from both.
+
+In every mode:
+
 | | Final |
 |---|---|
-| any reviewer says `no` | `no`, not sent |
-| otherwise, at least one `yes` | `yes`, sent |
-| otherwise (both `maybe`) | `maybe`, sent with ❔ (set `AI_FILTER_NOTIFY_MAYBE=false` to skip) |
-| one reviewer fails (timeout, bad reply) | decided by the other one |
+| one reviewer fails (timeout, bad reply) or is off | decided by the other one alone |
 | both fail | sent with `⚠️ AI check skipped` (set `AI_FILTER_FAIL_OPEN=false` to skip) |
+| outcome `maybe` | sent with ❔ (set `AI_FILTER_NOTIFY_MAYBE=false` to skip) |
 
-`AI_FILTER_COMBINE=strict` requires a `yes` from every reviewer that answered;
-anything less becomes `maybe`.
+Two `maybe` answers (or a `maybe` with a strict `yes`) are sent as
+`🤖❔ AI: unsure`.
 
 ### AI Vision filter
 
@@ -205,8 +225,8 @@ for r in sqlite3.connect('data/vinted_notifications.db').execute('''
 | `AI_FILTER_TEXT_MODEL` | `deepseek/deepseek-v4.1-flash` | Text reviewer; `off` to disable. |
 | `AI_FILTER_MAX_PHOTOS` | `4` | Photos sent to the vision model. |
 | `AI_FILTER_FETCH_DETAILS` | `true` | Fetch the full listing per checked item. |
-| `AI_FILTER_COMBINE` | `veto` | `veto` or `strict`, see above. |
-| `AI_FILTER_NOTIFY_MAYBE` | `true` | Send when the outcome is `maybe`. |
+| `AI_FILTER_COMBINE` | `maybe` | `maybe`, `veto` or `strict`, see [Final decision](#final-decision). |
+| `AI_FILTER_NOTIFY_MAYBE` | `true` | Send when the outcome is `maybe` (in every combine mode, reviewers disagreeing included). |
 | `AI_FILTER_FAIL_OPEN` | `true` | Send when no reviewer could answer. |
 | `AI_FILTER_BASE_URL` | `https://api.nano-gpt.com/api/subscription/v1` | NanoGPT's host for API-key use (larger and longer-running requests than the website host `nano-gpt.com`). Subscription-only endpoint: never spends prepaid balance. |
 | `AI_FILTER_TIMEOUT` | `60` | Seconds to wait for a model's answer; a timeout is retried once. Normal answers take 3–15 s. |
@@ -226,8 +246,9 @@ or the web UI.
   the last 3 items that query found — full listings — and shows each
   reviewer's answer (or the picture remarks), without saving. An emptied box
   is tested as empty.
-* **Items page:** each checked item shows the outcome (fits / doesn't fit /
-  unsure / check failed, sent or skipped) with both reviewers' reasons.
+* **Items page and Dashboard:** each checked item shows the outcome (fits /
+  doesn't fit / unsure / maybe (reviewers disagree) / check failed, sent or
+  skipped) with both reviewers' reasons.
 * **Shell checks** from the NAS. Run them as the bot's user (uid 10001) so no
   root-owned files end up in the data folder, and quote the URL:
 
