@@ -89,6 +89,7 @@ def index():
 
     # Get recent items
     items = db.get_items(limit=10)
+    ai_verdicts = db.get_ai_verdicts([item[0] for item in items])
     formatted_items = []
     for item in items:
         formatted_items.append(
@@ -102,6 +103,7 @@ def index():
                 "query": item[5],
                 "photo_url": item[6],
                 "url": f"{urlparse(item[5]).scheme}://{urlparse(item[5]).netloc}/items/{item[0]}",
+                "ai": ai_verdicts.get(item[0]),
             }
         )
 
@@ -114,6 +116,7 @@ def index():
         "total_items": db.get_total_items_count(),
         "total_queries": db.get_total_queries_count(),
         "items_per_day": db.get_items_per_day(),
+        "items_last_hour": db.get_items_last_hour(),
     }
 
     # Get the last found item
@@ -141,6 +144,7 @@ def index():
         telegram_running=telegram_running,
         rss_running=rss_running,
         stats=stats,
+        ai_status=ai_filter.status(),
     )
 
 

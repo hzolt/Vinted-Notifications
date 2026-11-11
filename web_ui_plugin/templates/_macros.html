@@ -1,0 +1,27 @@
+{# Macros shared by several pages. Import with {% from "_macros.html" import ... %} #}
+
+{# AI filter outcome of an item (item.ai: a row of ai_verdicts, see db.get_ai_verdicts) #}
+{% macro ai_badge(item) -%}
+{%- if item.ai -%}
+{%- set a = item.ai -%}
+{%- set words = {'yes': 'fits', 'no': "doesn't fit", 'maybe': 'unsure', 'error': 'check failed', 'remarks': 'not evaluated, just vision checked'} -%}
+{%- set colours = {'yes': 'bg-success', 'no': 'bg-secondary', 'maybe': 'bg-warning text-dark', 'error': 'bg-danger', 'remarks': 'bg-info text-dark'} -%}
+{#- one reviewer said "no", the other did not (AI_FILTER_COMBINE=maybe, see ai_filter.disagree) -#}
+{%- set disagree = a.final_decision == 'maybe' and 'no' in [a.vision_decision, a.text_decision] -%}
+<span class="badge {{ colours.get(a.final_decision, 'bg-light text-dark') }}" style="white-space: normal; text-align: left;"
+      title="{{ a.final_reason or '' }}"><i class="bi bi-robot me-1"></i>AI: {{ 'maybe (reviewers disagree)' if disagree else words.get(a.final_decision, a.final_decision) }}, {{ 'sent' if a.notified else 'skipped' }}</span>
+<div class="small text-dark mt-1">
+{%- if a.vision_decision == 'remarks' %}<div title="{{ a.vision_model }}{% if a.vision_intent %}: {{ a.vision_intent }}{% endif %}"><i class="bi bi-eye me-1"></i><b>picture remarks</b>: {{ a.vision_reason }}</div>
+{%- elif a.vision_decision %}<div title="{{ a.vision_model }}{% if a.vision_intent %} (+ AI Vision filter: {{ a.vision_intent }}){% endif %}"><i class="bi bi-image me-1"></i><b>{{ a.vision_decision }}</b>: {{ a.vision_reason }}</div>{% endif -%}
+{%- if a.text_decision %}<div title="{{ a.text_model }}"><i class="bi bi-file-text me-1"></i><b>{{ a.text_decision }}</b>: {{ a.text_reason }}</div>{% endif -%}
+{%- if a.details_source == 'catalog' %}<div class="fst-italic">listing details were not available</div>{% endif -%}
+</div>
+{%- endif -%}
+{%- endmacro %}
+
+{# AI filter on/off line (ai_status: ai_filter.status()) #}
+{% macro ai_status_bar(ai_status, classes='') -%}
+<div class="alert {{ 'alert-info' if ai_status.enabled else 'alert-secondary' }} py-2 {{ classes }}" role="status">
+    <i class="bi bi-robot me-2"></i>{{ ai_status.text }}
+</div>
+{%- endmacro %}

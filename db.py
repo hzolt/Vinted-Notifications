@@ -652,6 +652,29 @@ def get_last_found_item():
             conn.close()
 
 
+def get_items_last_hour():
+    """Number of items whose timestamp is within the last hour.
+
+    The timestamp is Vinted's listing time when the API gives one, otherwise
+    the time the bot found the item (see pyVintedVN Item.raw_timestamp); new
+    listings are found within a refresh cycle of being listed."""
+    import time as _time
+
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS)
+        return conn.execute(
+            "SELECT COUNT(*) FROM items WHERE timestamp >= ?",
+            (int(_time.time()) - 3600,),
+        ).fetchone()[0]
+    except Exception:
+        _log_db_error()
+        return 0
+    finally:
+        if conn:
+            conn.close()
+
+
 def get_items_per_day():
     conn = None
     try:

@@ -57,6 +57,7 @@
                     </td>
                     <td>
                         {{ decision_badge(ev.decision) }}
+                        {% if ev.disagreement %}<div class="small">reviewers disagree</div>{% endif %}
                         <div class="small text-muted">{{ 'would notify' if ev.notify else 'would skip' }}</div>
                     </td>
                     <td class="small">{% if ev.vision %}{% if ev.vision.decision == 'remarks' %}<i class="bi bi-eye me-1"></i><b>picture remarks:</b>{% else %}{{ decision_badge(ev.vision.decision) }}{% endif %} {{ ev.vision.reason }}{% else %}<span class="text-muted">off</span>{% endif %}</td>

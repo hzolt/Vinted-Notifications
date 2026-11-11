@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import ai_status_bar %}
 
 {% block title %}Queries - Vinted Notifications{% endblock %}
 
@@ -13,9 +14,7 @@ are not used.</span>{% endif %}
     <h1 class="h2">Queries</h1>
 </div>
 
-<div class="alert {{ 'alert-info' if ai_status.enabled else 'alert-secondary' }} py-2" role="status">
-    <i class="bi bi-robot me-2"></i>{{ ai_status.text }}
-</div>
+{{ ai_status_bar(ai_status) }}
 
 <div class="row mb-4">
     <div class="col-md-12">

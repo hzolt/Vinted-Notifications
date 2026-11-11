@@ -14,10 +14,17 @@ page's embedded data, then its schema.org product block, then its preview
 description. If none of that is usable the check runs on the search-result
 data, and the stored verdict says so (details source "catalog").
 
-Final decision, AI_FILTER_COMBINE=veto (default): any "no" rejects; otherwise
-"yes" if either reviewer says yes; otherwise "maybe". AI_FILTER_COMBINE=strict
-needs a "yes" from every reviewer that ran. A reviewer that fails is left out;
-if all fail the item is notified (AI_FILTER_FAIL_OPEN).
+Final decision (AI_FILTER_COMBINE), from the reviewers that answered:
+
+* maybe (default): "no" only if every reviewer says no; a "no" against a
+  "yes" or "maybe" (the reviewers disagree) gives "maybe"; otherwise "yes" if
+  either reviewer says yes, else "maybe".
+* veto: any "no" rejects; otherwise "yes" if either says yes, else "maybe".
+* strict: any "no" rejects; "yes" only if every reviewer says yes, else "maybe".
+
+A "maybe" outcome is notified unless AI_FILTER_NOTIFY_MAYBE is false. A
+reviewer that fails is left out; if all fail the item is notified
+(AI_FILTER_FAIL_OPEN).
 
 A query can also have "AI Vision filter" instructions, which only the vision
 model gets:
@@ -36,7 +43,7 @@ Environment variables (the API key never lands in the database or the web UI):
     AI_FILTER_TEXT_MODEL     default: deepseek/deepseek-v4.1-flash ("off" to disable)
     AI_FILTER_MAX_PHOTOS     photos sent to the vision model (default: 4)
     AI_FILTER_FETCH_DETAILS  fetch the full listing per checked item (default: true)
-    AI_FILTER_COMBINE        veto | strict (default: veto)
+    AI_FILTER_COMBINE        maybe | veto | strict (default: maybe)
     AI_FILTER_NOTIFY_MAYBE   notify when the outcome is "maybe" (default: true)
     AI_FILTER_FAIL_OPEN      notify when no reviewer could answer (default: true)
     AI_FILTER_TIMEOUT        seconds to wait for a model's answer, retried once (default: 60)
@@ -73,6 +80,7 @@ DEFAULT_BASE_URL = "https://api.nano-gpt.com/api/subscription/v1"
 DEFAULT_VISION_MODEL = "minimax/minimax-m3"
 DEFAULT_TEXT_MODEL = "deepseek/deepseek-v4.1-flash"
 MAX_DESCRIPTION_CHARS = 4000
+COMBINE_MODES = ("maybe", "veto", "strict")  # the first one is the default
 
 _COMMON_RULES = """- "no": your evidence clearly contradicts one of the buyer's criteria{no_extra}.
 - "yes": your evidence fits the criteria it can address, and nothing in it contradicts them.
@@ -144,7 +152,7 @@ def _env_model(name, default):
 
 
 def settings():
-    combine = (os.environ.get("AI_FILTER_COMBINE") or "veto").strip().lower()
+    combine = (os.environ.get("AI_FILTER_COMBINE") or "").strip().lower()
     return {
         "api_key": os.environ.get("NANOGPT_API_KEY", "").strip(),
         "enabled": _env_bool("AI_FILTER_ENABLED", True),
@@ -155,7 +163,7 @@ def settings():
         "text_model": _env_model("AI_FILTER_TEXT_MODEL", DEFAULT_TEXT_MODEL),
         "max_photos": max(1, _env_int("AI_FILTER_MAX_PHOTOS", 4)),
         "fetch_details": _env_bool("AI_FILTER_FETCH_DETAILS", True),
-        "combine": combine if combine in ("veto", "strict") else "veto",
+        "combine": combine if combine in COMBINE_MODES else COMBINE_MODES[0],
         "notify_maybe": _env_bool("AI_FILTER_NOTIFY_MAYBE", True),
         "fail_open": _env_bool("AI_FILTER_FAIL_OPEN", True),
         "timeout": _env_int("AI_FILTER_TIMEOUT", 60),
@@ -253,8 +261,15 @@ class Evaluation:
     def input_tokens(self):
         return sum(v.input_tokens for v in (self.vision, self.text) if v)
 
+    @property
+    def disagreement(self):
+        """The outcome is "maybe" because the reviewers disagree (see combine)."""
+        return disagree(self.decision, self.vision and self.vision.decision,
+                        self.text and self.text.decision)
+
     def summary(self):
-        parts = [f"{self.decision.upper()} ({self.seconds:.1f} s, {self.input_tokens} in-tokens,"
+        decision = self.decision.upper() + (", reviewers disagree" if self.disagreement else "")
+        parts = [f"{decision} ({self.seconds:.1f} s, {self.input_tokens} in-tokens,"
                  f" details: {self.listing.source if self.listing else '?'} in {self.fetch_seconds:.1f} s)"]
         for v in (self.vision, self.text):
             if v:
@@ -869,22 +884,40 @@ def judge_text(intent, listing, s):
     return _ask("text", s["text_model"], TEXT_PROMPT, content, s)
 
 
+def disagree(decision, vision_decision, text_decision):
+    """True when a "maybe" outcome comes from the reviewers disagreeing: one
+    said "no" and the other did not (only AI_FILTER_COMBINE=maybe gives that;
+    veto and strict reject on any "no")."""
+    return decision == "maybe" and "no" in (vision_decision, text_decision)
+
+
 def combine(vision, text, s):
-    """Return (decision, reason, notify) from the reviewers that ran."""
+    """Return (decision, reason, notify) from the reviewers that ran.
+
+    AI_FILTER_COMBINE (see the module docstring):
+    maybe   "no" only if every reviewer that answered says no; a "no" against
+            a "yes" or "maybe" gives "maybe" (the reviewers disagree)
+    veto    any "no" rejects
+    strict  any "no" rejects, and "yes" needs a "yes" from every reviewer
+    """
     ran = [v for v in (vision, text) if v]
     answered = [v for v in ran if v.decision != "error"]
     if not answered:
         reason = "; ".join(f"{v.reviewer}: {v.reason}" for v in ran) or "no reviewer configured"
         return "error", reason, s["fail_open"]
     rejecting = [v for v in answered if v.decision == "no"]
-    if rejecting:
+    if rejecting and (s["combine"] != "maybe" or len(rejecting) == len(answered)):
         return "no", "; ".join(f"{v.reviewer}: {v.reason}" for v in rejecting), False
     yes_votes = [v for v in answered if v.decision == "yes"]
-    if s["combine"] == "strict":
+    if rejecting:  # combine=maybe, the reviewers disagree
+        decision = "maybe"
+    elif s["combine"] == "strict":
         decision = "yes" if len(yes_votes) == len(answered) else "maybe"
     else:
         decision = "yes" if yes_votes else "maybe"
     reason = "; ".join(f"{v.reviewer}: {v.reason}" for v in answered)
+    if rejecting:
+        reason = "reviewers disagree: " + reason
     failed = [v for v in ran if v.decision == "error"]
     if failed:
         reason += "; " + "; ".join(f"{v.reviewer} unavailable ({v.reason})" for v in failed)
@@ -955,7 +988,10 @@ def format_note(ev):
         return "\n".join(lines)
     if ev.decision == "error":
         return f"⚠️ AI check skipped: {html.escape(ev.reason)}"
-    header = {"yes": "🤖 AI: fits", "maybe": "🤖❔ AI: unsure"}.get(ev.decision, f"🤖 AI: {ev.decision}")
+    if ev.disagreement:
+        header = "🤖❔ AI: maybe, reviewers disagree"
+    else:
+        header = {"yes": "🤖 AI: fits", "maybe": "🤖❔ AI: unsure"}.get(ev.decision, f"🤖 AI: {ev.decision}")
     lines = [header]
     for icon, v in (("👁", ev.vision), ("📝", ev.text)):
         if v:
@@ -1004,7 +1040,8 @@ def _main():
     if not (args.intent or args.vision_intent):
         parser.error("--intent or --vision-intent is required unless --details-only is given")
     ev = evaluate(args.intent, listing, fetch=False, vision_intent=args.vision_intent)
-    out = {"final": ev.decision, "reason": ev.reason, "notify": ev.notify,
+    out = {"final": ev.decision, "reviewers_disagree": ev.disagreement,
+           "reason": ev.reason, "notify": ev.notify,
            "input_tokens": ev.input_tokens, "seconds": round(ev.seconds, 1)}
     for v in (ev.vision, ev.text):
         if v:
