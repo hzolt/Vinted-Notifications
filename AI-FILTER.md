@@ -64,6 +64,19 @@ change it answers 404 to anonymous clients.
 Each reviewer answers `yes`, `no` or `maybe`, judging only what its evidence
 can show (photos can't confirm a size; text can't show a stain).
 
+The reviewers read the filter text for what you mean, not word for word: a
+game or accessory that works with the device you named (for example one made
+for an earlier model that also runs on it) fits, and when they are not sure
+whether something counts they answer `maybe`, not `no`.
+
+The text reviewer gets the seller's title and description apart from the
+fields picked from Vinted's lists (platform, brand, size, condition, colour,
+material, ...). Those lists often lack the right option, so sellers pick the
+nearest one: a Sega Master System game is often listed under the "Sega Mega
+Drive" platform. When such a field disagrees with the title or description,
+the title and description win, and a field that may just be the nearest option
+is not on its own a reason for `no`.
+
 | | Final |
 |---|---|
 | any reviewer says `no` | `no`, not sent |
@@ -248,6 +261,10 @@ or the web UI.
   with what text states (size, measurements, defects, "never worn"); each
   reviewer picks the parts it can judge.
 * Say what you don't want ("no replicas", "no bundles", "nothing for parts").
+* Name what you accept the way sellers name it. "Master System II cartridge"
+  is not a thing sellers write: the Master System II plays the original
+  Master System cartridges, so "original Master System games (they also run
+  on the Master System II)" says it better.
 * Put what only the photos can answer, and how closely to look, in the AI
   Vision filter ("look for scratches and wear", "stock photos or the
   seller's own?"); the text reviewer never sees it.
